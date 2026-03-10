@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+  
+  html, body, #root {
+    @apply h-full w-full m-0 p-0;
+  }
+  
+  body {
+    @apply bg-bg-primary text-text-primary font-sans antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  input, button {
+    @apply font-sans;
+  }
+  
+  /* Number formatting with tabular figures */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Touch targets */
+  .touch-target {
+    @apply min-h-touch min-w-touch;
+  }
+  
+  /* Button base styles */
+  .btn {
+    @apply touch-target px-6 rounded-button font-semibold transition-all duration-150 
+           flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  
+  .btn-primary {
+    @apply btn bg-accent-primary text-text-inverse hover:bg-opacity-90 active:scale-[0.98];
+  }
+  
+  .btn-secondary {
+    @apply btn bg-surface-primary border border-accent-primary-light text-text-primary 
+           hover:border-accent-primary active:scale-[0.98];
+  }
+  
+  .btn-danger {
+    @apply btn bg-accent-negative text-text-inverse hover:bg-opacity-90 active:scale-[0.98];
+  }
+  
+  .btn-ghost {
+    @apply btn bg-transparent text-text-secondary hover:bg-surface-pressed;
+  }
+  
+  /* Card styles */
+  .card {
+    @apply bg-surface-primary rounded-card p-5 shadow-card;
+  }
+  
+  /* Input styles */
+  .input {
+    @apply h-button px-4 bg-bg-tertiary rounded-input border border-transparent
+           text-text-primary placeholder:text-text-tertiary
+           focus:outline-none focus:border-accent-primary-light
+           transition-colors duration-150;
+  }
+  
+  /* Badge styles */
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-caption font-medium;
+  }
+  
+  .badge-active {
+    @apply badge bg-accent-primary text-text-inverse;
+  }
+  
+  .badge-completed {
+    @apply badge bg-bg-tertiary text-text-secondary;
+  }
+  
+  /* Profit/Loss text */
+  .profit {
+    @apply text-accent-positive;
+  }
+  
+  .loss {
+    @apply text-accent-negative;
+  }
+
+  /* Watermark */
+  .watermark {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 440px;
+    height: 440px;
+    background-image: url('/ethan.png');
+    background-size: cover;
+    background-repeat: no-repeat;
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .watermark-left {
+    left: 0;
+    transform: translateY(-50%);
+  }
+
+  .watermark-right {
+    right: 0;
+    transform: translateY(-50%) scaleX(-1);
+  }
+
+  @media (max-width: 768px) {
+    .watermark-left {
+      display: none;
+    }
+
+    .watermark-right {
+      right: 50%;
+      transform: translateY(-50%) translateX(50%);
+      opacity: 0.3;
+    }
+  }
+}
