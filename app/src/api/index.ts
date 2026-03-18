@@ -84,6 +84,62 @@ export async function addBuyIn(
   return handleResponse<Session>(response);
 }
 
+// Update buy-in API
+export async function updateBuyIn(
+  sessionId: string,
+  playerId: string,
+  buyInId: string,
+  amount: number,
+  method: 'cash' | 'bank'
+): Promise<Session> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/players/${playerId}/buyins/${buyInId}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ amount, method }),
+  });
+  return handleResponse<Session>(response);
+}
+
+// Delete buy-in API
+export async function deleteBuyIn(
+  sessionId: string,
+  playerId: string,
+  buyInId: string
+): Promise<Session> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/players/${playerId}/buyins/${buyInId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<Session>(response);
+}
+
+// Import API
+export interface ImportResult {
+  imported: number;
+  skipped: number;
+  total: number;
+  errors?: string[];
+  message: string;
+}
+
+export async function importSpreadsheet(): Promise<ImportResult> {
+  const response = await fetch(`${API_BASE_URL}/import/spreadsheet`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+  return handleResponse<ImportResult>(response);
+}
+
+export async function clearImportedSessions(): Promise<{ deleted: number; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/import/spreadsheet`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ deleted: number; message: string }>(response);
+}
+
 // Cash out API
 export async function cashOut(
   sessionId: string,

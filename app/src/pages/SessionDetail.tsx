@@ -4,6 +4,7 @@ import { useSessions } from '../hooks/useStorage';
 import type { Player } from '../types';
 import { PlayerRow } from '../components/PlayerRow';
 import { CashOutModal } from '../components/CashOutModal';
+import { BuyInsModal } from '../components/BuyInsModal';
 import {
   getTotalBuyIn,
   getSessionTotals,
@@ -15,7 +16,7 @@ import {
 export function SessionDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, updateSession, addPlayerToSession, addPlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions();
+  const { getSession, updateSession, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions();
 
   const session = getSession(id || '');
 
@@ -25,6 +26,7 @@ export function SessionDetail() {
   const [customBuyInPlayer, setCustomBuyInPlayer] = useState<Player | null>(null);
   const [customBuyInAmount, setCustomBuyInAmount] = useState('');
   const [customBuyInMethod, setCustomBuyInMethod] = useState<'cash' | 'bank'>('cash');
+  const [editBuyInsPlayer, setEditBuyInsPlayer] = useState<Player | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -120,6 +122,32 @@ export function SessionDetail() {
     await handleAddBuyIn(customBuyInPlayer.id, amount, customBuyInMethod);
     setCustomBuyInPlayer(null);
     setCustomBuyInAmount('');
+  };
+
+  const handleUpdateBuyIn = async (playerId: string, buyInId: string, amount: number, method: 'cash' | 'bank') => {
+    if (actionLoading) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await updatePlayerBuyIn(session.id, playerId, buyInId, amount, method);
+    } catch (err) {
+      setActionError('Failed to update buy-in. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteBuyIn = async (playerId: string, buyInId: string) => {
+    if (actionLoading) return;
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await deletePlayerBuyIn(session.id, playerId, buyInId);
+    } catch (err) {
+      setActionError('Failed to delete buy-in. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const handleEndSession = async () => {
@@ -225,6 +253,7 @@ export function SessionDetail() {
               player={player}
               onAddBuyIn={(amount, method) => handleAddBuyIn(player.id, amount, method)}
               onCashOut={() => setCashOutPlayer(player)}
+              onEditBuyIns={() => setEditBuyInsPlayer(player)}
               showCustomBuyIn={(method) => { setCustomBuyInPlayer(player); setCustomBuyInMethod(method); }}
               disabled={actionLoading}
             />
@@ -389,6 +418,21 @@ export function SessionDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Buy-ins Modal */}
+      {editBuyInsPlayer && (
+        <BuyInsModal
+          player={session.players.find(p => p.id === editBuyInsPlayer.id) || editBuyInsPlayer}
+          onUpdateBuyIn={(buyInId, amount, method) =>
+            handleUpdateBuyIn(editBuyInsPlayer.id, buyInId, amount, method)
+          }
+          onDeleteBuyIn={(buyInId) =>
+            handleDeleteBuyIn(editBuyInsPlayer.id, buyInId)
+          }
+          onClose={() => setEditBuyInsPlayer(null)}
+          isLoading={actionLoading}
+        />
       )}
     </div>
   );

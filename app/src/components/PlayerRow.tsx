@@ -51,9 +51,13 @@ export function PlayerRow({
               )}
             </div>
             <div className="text-sm text-text-secondary">
-              <span className="tabular-nums">
+              <button
+                onClick={buyInCount > 0 ? onEditBuyIns : undefined}
+                className={`tabular-nums ${buyInCount > 0 ? 'underline decoration-dotted underline-offset-2 hover:text-accent-primary transition-colors' : ''}`}
+                disabled={buyInCount === 0}
+              >
                 {buyInCount} buy-in{buyInCount !== 1 ? 's' : ''}: {formatCurrency(totalBuyIn)}
-              </span>
+              </button>
               {buyInCount > 0 && (
                 <span className="text-xs text-text-tertiary ml-1">
                   ({cashTotal > 0 ? `${formatCurrency(cashTotal)} cash` : ''}

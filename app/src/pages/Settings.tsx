@@ -1,9 +1,16 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSettings } from '../hooks/useStorage';
+import { importSpreadsheet, clearImportedSessions } from '../api';
+import type { ImportResult } from '../api';
 
 export function Settings() {
   const navigate = useNavigate();
   const { settings, updateSettings } = useSettings();
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const currencies = [
     { code: 'USD', symbol: '$', name: 'US Dollar' },
@@ -88,6 +95,76 @@ export function Settings() {
             ) : (
               <p className="text-text-tertiary text-sm">No common players yet. Add players when creating a session to see them here.</p>
             )}
+          </div>
+
+          {/* Import from Spreadsheet */}
+          <div className="card">
+            <h2 className="text-lg font-semibold text-text-primary mb-4">Import Historical Data</h2>
+            <p className="text-text-secondary text-sm mb-4">
+              Import past poker sessions from the Tribe Poker Stats Google Sheet. Each session tab will become a completed session in the tracker.
+            </p>
+
+            {importResult && (
+              <div className="mb-4 p-3 rounded-lg bg-accent-positive/10 border border-accent-positive/20">
+                <p className="text-sm font-medium text-accent-positive">{importResult.message}</p>
+                <p className="text-xs text-text-tertiary mt-1">
+                  {importResult.imported} imported, {importResult.skipped} skipped, {importResult.total} total tabs
+                </p>
+                {importResult.errors && importResult.errors.length > 0 && (
+                  <p className="text-xs text-accent-negative mt-1">
+                    {importResult.errors.length} error(s): {importResult.errors[0]}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {importError && (
+              <div className="mb-4 p-3 rounded-lg bg-accent-negative/10 border border-accent-negative/20">
+                <p className="text-sm text-accent-negative">{importError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={async () => {
+                  setImporting(true);
+                  setImportError(null);
+                  setImportResult(null);
+                  try {
+                    const result = await importSpreadsheet();
+                    setImportResult(result);
+                  } catch (err) {
+                    setImportError(err instanceof Error ? err.message : 'Import failed');
+                  } finally {
+                    setImporting(false);
+                  }
+                }}
+                disabled={importing || clearing}
+                className="flex-1 py-3 px-4 rounded-lg font-medium transition-all bg-accent-primary text-white hover:bg-accent-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {importing ? 'Importing...' : 'Import from Spreadsheet'}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!confirm('Remove all previously imported sessions?')) return;
+                  setClearing(true);
+                  setImportError(null);
+                  setImportResult(null);
+                  try {
+                    const result = await clearImportedSessions();
+                    setImportResult({ imported: 0, skipped: 0, total: 0, message: result.message });
+                  } catch (err) {
+                    setImportError(err instanceof Error ? err.message : 'Clear failed');
+                  } finally {
+                    setClearing(false);
+                  }
+                }}
+                disabled={importing || clearing}
+                className="py-3 px-4 rounded-lg font-medium transition-all bg-bg-tertiary text-text-secondary hover:bg-accent-negative/10 hover:text-accent-negative disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {clearing ? 'Clearing...' : 'Clear Imported'}
+              </button>
+            </div>
           </div>
 
           {/* About */}

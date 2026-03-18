@@ -7,6 +7,8 @@ import {
   deleteSession as apiDeleteSession,
   addPlayer as apiAddPlayer,
   addBuyIn as apiAddBuyIn,
+  updateBuyIn as apiUpdateBuyIn,
+  deleteBuyIn as apiDeleteBuyIn,
   cashOut as apiCashOut,
 } from '../api';
 
@@ -208,6 +210,60 @@ export function useSessions() {
     }
   }, []);
 
+  // Update buy-in
+  const updatePlayerBuyIn = useCallback(async (
+    sessionId: string,
+    playerId: string,
+    buyInId: string,
+    amount: number,
+    method: 'cash' | 'bank'
+  ) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updatedSession = await apiUpdateBuyIn(sessionId, playerId, buyInId, amount, method);
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId ? updatedSession : session
+        )
+      );
+      return updatedSession;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update buy-in';
+      setError(message);
+      console.error('Error updating buy-in:', err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Delete buy-in
+  const deletePlayerBuyIn = useCallback(async (
+    sessionId: string,
+    playerId: string,
+    buyInId: string
+  ) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updatedSession = await apiDeleteBuyIn(sessionId, playerId, buyInId);
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === sessionId ? updatedSession : session
+        )
+      );
+      return updatedSession;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete buy-in';
+      setError(message);
+      console.error('Error deleting buy-in:', err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
   // Cash out management
   const cashOutPlayer = useCallback(async (sessionId: string, playerId: string, amount: number) => {
     setIsLoading(true);
@@ -241,6 +297,8 @@ export function useSessions() {
     getSession,
     addPlayerToSession,
     addPlayerBuyIn,
+    updatePlayerBuyIn,
+    deletePlayerBuyIn,
     cashOutPlayer,
   };
 }
