@@ -50,6 +50,13 @@ export function Home() {
               </button>
             )}
             <button
+              onClick={() => navigate('/aliases')}
+              className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
+              title="Match online aliases to players"
+            >
+              🔗
+            </button>
+            <button
               onClick={() => navigate('/settings')}
               className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
             >

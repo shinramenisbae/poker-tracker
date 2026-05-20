@@ -1,9 +1,29 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const db = require('./database');
 
 const app = express();
 const PORT = 5001;
+
+// --- Alias seeding (one-shot on first start of an empty table) ---
+const ALIAS_SEED_PATH = path.join(__dirname, 'aliases-seed.json');
+let aliasSeed = { aliases: [], canonical_players: [], initial_mappings: {} };
+try {
+  aliasSeed = JSON.parse(fs.readFileSync(ALIAS_SEED_PATH, 'utf8'));
+} catch (err) {
+  console.warn(`Could not read aliases-seed.json (${err.message}); /api/alias-mappings will return empty.`);
+}
+db.get('SELECT COUNT(*) AS n FROM alias_mappings', [], (err, row) => {
+  if (err || !row || row.n > 0) return;
+  const now = new Date().toISOString();
+  const stmt = db.prepare('INSERT OR IGNORE INTO alias_mappings (alias, realName, updatedAt) VALUES (?, ?, ?)');
+  for (const alias of aliasSeed.aliases) {
+    stmt.run(alias, aliasSeed.initial_mappings[alias] || null, now);
+  }
+  stmt.finalize(() => console.log(`Seeded ${aliasSeed.aliases.length} alias_mappings rows.`));
+});
 
 // --- Google Sheets Import Helpers ---
 
@@ -834,6 +854,48 @@ app.delete('/api/import/spreadsheet', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     res.json({ deleted: this.changes, message: `Removed ${this.changes} imported sessions` });
+  });
+});
+
+// --- Alias mappings API (for the /aliases crowd-sourcing UI) ---
+
+// GET /api/alias-mappings — returns everything the UI needs in one call
+app.get('/api/alias-mappings', (req, res) => {
+  db.all('SELECT alias, realName FROM alias_mappings ORDER BY alias COLLATE NOCASE', [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    // Build the set of canonical names: seed file + any realName values friends have added
+    const canonical = new Set(aliasSeed.canonical_players || []);
+    for (const r of rows) {
+      if (r.realName && r.realName.trim()) canonical.add(r.realName.trim());
+    }
+
+    res.json({
+      aliases: rows.map((r) => ({ alias: r.alias, realName: r.realName || null })),
+      canonicalPlayers: [...canonical].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+    });
+  });
+});
+
+// PUT /api/alias-mappings/:alias — set or clear the mapping for one alias
+//   body: { realName: string | null }  (empty string or null clears the mapping)
+app.put('/api/alias-mappings/:alias', (req, res) => {
+  const alias = req.params.alias;
+  const realName = (req.body.realName || '').trim() || null;
+  const now = new Date().toISOString();
+
+  db.get('SELECT alias FROM alias_mappings WHERE alias = ?', [alias], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: `Alias "${alias}" not found` });
+
+    db.run(
+      'UPDATE alias_mappings SET realName = ?, updatedAt = ? WHERE alias = ?',
+      [realName, now, alias],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ alias, realName });
+      }
+    );
   });
 });
 

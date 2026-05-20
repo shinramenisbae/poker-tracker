@@ -42,6 +42,16 @@ db.serialize(() => {
     )
   `);
 
+  // alias_mappings: crowd-sourced mapping of online ledger aliases to canonical player names
+  // (used by the Discord backfill flow — friends help match unknown aliases via the /aliases UI)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS alias_mappings (
+      alias TEXT PRIMARY KEY,
+      realName TEXT,
+      updatedAt TEXT NOT NULL
+    )
+  `);
+
   // Migration: add method column if it doesn't exist (for existing DBs)
   db.run(`ALTER TABLE buyIns ADD COLUMN method TEXT DEFAULT 'cash'`, (err) => {
     // Ignore error if column already exists

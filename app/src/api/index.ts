@@ -158,3 +158,27 @@ export async function cashOut(
   });
   return handleResponse<Session>(response);
 }
+
+// Alias mappings API (for the /aliases crowd-sourcing page)
+export interface AliasMapping {
+  alias: string;
+  realName: string | null;
+}
+export interface AliasMappingsResponse {
+  aliases: AliasMapping[];
+  canonicalPlayers: string[];
+}
+
+export async function fetchAliasMappings(): Promise<AliasMappingsResponse> {
+  const response = await fetch(`${API_BASE_URL}/alias-mappings`);
+  return handleResponse<AliasMappingsResponse>(response);
+}
+
+export async function setAliasMapping(alias: string, realName: string | null): Promise<AliasMapping> {
+  const response = await fetch(`${API_BASE_URL}/alias-mappings/${encodeURIComponent(alias)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ realName }),
+  });
+  return handleResponse<AliasMapping>(response);
+}
