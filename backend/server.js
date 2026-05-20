@@ -209,16 +209,16 @@ app.get('/api/sessions/:id', (req, res) => {
 
 // POST /api/sessions - Create new session
 app.post('/api/sessions', (req, res) => {
-  const { date, notes, players } = req.body;
+  const { date, notes, players, gameType, status } = req.body;
   const id = generateId();
   const now = new Date().toISOString();
 
   const stmt = db.prepare(`
-    INSERT INTO sessions (id, date, status, notes, createdAt, updatedAt)
-    VALUES (?, ?, 'active', ?, ?, ?)
+    INSERT INTO sessions (id, date, status, notes, gameType, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  
-  stmt.run(id, date || now.split('T')[0], notes || '', now, now, function(err) {
+
+  stmt.run(id, date || now.split('T')[0], status || 'active', notes || '', gameType || 'in-person', now, now, function(err) {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
@@ -282,7 +282,7 @@ app.post('/api/sessions', (req, res) => {
 // PUT /api/sessions/:id - Update session
 app.put('/api/sessions/:id', (req, res) => {
   const sessionId = req.params.id;
-  const { date, status, notes, bankPlayerId } = req.body;
+  const { date, status, notes, bankPlayerId, gameType } = req.body;
   const now = new Date().toISOString();
 
   db.get('SELECT * FROM sessions WHERE id = ?', [sessionId], (err, existing) => {
@@ -294,16 +294,17 @@ app.put('/api/sessions/:id', (req, res) => {
     }
 
     const stmt = db.prepare(`
-      UPDATE sessions 
-      SET date = ?, status = ?, notes = ?, bankPlayerId = ?, updatedAt = ?
+      UPDATE sessions
+      SET date = ?, status = ?, notes = ?, bankPlayerId = ?, gameType = ?, updatedAt = ?
       WHERE id = ?
     `);
-    
+
     stmt.run(
       date || existing.date,
       status || existing.status,
       notes !== undefined ? notes : existing.notes,
       bankPlayerId !== undefined ? bankPlayerId : existing.bankPlayerId,
+      gameType || existing.gameType,
       now,
       sessionId,
       function(err) {

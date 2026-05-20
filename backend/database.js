@@ -12,6 +12,7 @@ db.serialize(() => {
       status TEXT NOT NULL DEFAULT 'active',
       notes TEXT,
       bankPlayerId TEXT,
+      gameType TEXT NOT NULL DEFAULT 'in-person',
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL
     )
@@ -43,6 +44,11 @@ db.serialize(() => {
 
   // Migration: add method column if it doesn't exist (for existing DBs)
   db.run(`ALTER TABLE buyIns ADD COLUMN method TEXT DEFAULT 'cash'`, (err) => {
+    // Ignore error if column already exists
+  });
+
+  // Migration: add gameType column if it doesn't exist (for existing DBs)
+  db.run(`ALTER TABLE sessions ADD COLUMN gameType TEXT NOT NULL DEFAULT 'in-person'`, (err) => {
     // Ignore error if column already exists
   });
 });

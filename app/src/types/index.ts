@@ -7,6 +7,7 @@ export interface Session {
   players: Player[];
   bankPlayerId: string | null;
   notes: string;
+  gameType: 'in-person' | 'online';
 }
 
 export interface Player {
