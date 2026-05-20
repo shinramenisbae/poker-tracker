@@ -152,7 +152,13 @@ async function main() {
   const dedup = buildDedupKeys(existing);
   console.log(`  ${existing.length} existing sessions, ${dedup.byThreadId.size} previously imported from Discord.`);
 
-  const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent, // required to read attachments on messages the bot didn't author
+    ],
+  });
   await client.login(DISCORD_TOKEN);
   console.log(`Logged in as ${client.user.tag}.`);
 
