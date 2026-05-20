@@ -35,28 +35,15 @@ cp -r "$FRONTEND_DIR/dist"/* "$WEB_ROOT/"
 echo -e "${GREEN}✓ Frontend deployed to $WEB_ROOT${NC}"
 echo ""
 
-echo -e "${YELLOW}Step 3: Restarting frontend service...${NC}"
-systemctl restart poker-tracker.service
-echo -e "${GREEN}✓ Frontend service restarted (port 5000)${NC}"
-echo ""
-
-echo -e "${YELLOW}Step 4: Restarting backend service...${NC}"
+echo -e "${YELLOW}Step 3: Restarting backend service...${NC}"
 systemctl restart tribe-poker-backend.service
 echo -e "${GREEN}✓ Backend service restarted (port 5001)${NC}"
 echo ""
 
-echo -e "${YELLOW}Step 5: Checking service status...${NC}"
+echo -e "${YELLOW}Step 4: Checking service status...${NC}"
 sleep 2
 
-# Check frontend
-if systemctl is-active --quiet poker-tracker.service; then
-    echo -e "${GREEN}✓ Frontend service is running (port 5000)${NC}"
-else
-    echo -e "${RED}✗ Frontend service is NOT running${NC}"
-    exit 1
-fi
-
-# Check backend
+# Frontend is served by nginx from $WEB_ROOT (no dedicated systemd unit).
 if systemctl is-active --quiet tribe-poker-backend.service; then
     echo -e "${GREEN}✓ Backend service is running (port 5001)${NC}"
 else
