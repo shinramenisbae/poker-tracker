@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client, GatewayIntentBits, ChannelType } from 'discord.js';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI, Type } from '@google/genai';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,11 +11,11 @@ const {
   DISCORD_TOKEN,
   DISCORD_CHANNEL_ID,
   TRACKER_API_BASE,
-  ANTHROPIC_API_KEY,
-  ANTHROPIC_MODEL = 'claude-haiku-4-5',
+  GEMINI_API_KEY,
+  GEMINI_MODEL = 'gemini-2.5-flash',
 } = process.env;
 
-for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, ANTHROPIC_API_KEY })) {
+for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, GEMINI_API_KEY })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
 }
 
@@ -23,40 +23,58 @@ const aliases = JSON.parse(await fs.readFile(path.join(__dirname, 'aliases.json'
 delete aliases._comment;
 const aliasLookup = new Map(Object.entries(aliases).map(([k, v]) => [k.toLowerCase(), v]));
 
-const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-const VISION_SYSTEM = `You analyze poker session screenshots and return strict JSON, no prose.
+const VISION_SYSTEM = `You analyze poker session screenshots and return strict JSON.
 
-Schema:
-{
-  "type": "online_ledger" | "in_person_summary" | "unknown",
-  "rows": [{"name": string, "handle": string, "buyIn": number, "buyOut": number, "stack": number, "net": number}]
-}
-
-Classify the image:
+Classify the image as one of:
 - "online_ledger": white background, header "Session Ledger", columns Player / Buy-In / Buy-Out / Stack / Net.
 - "in_person_summary": shows "Session Summary", bank player, Winners/Owes Money, "Who Pays Who".
 - "unknown": anything else.
 
-If online_ledger, extract every player row. "name" is the bold player name; "handle" is the lighter text after "@" (may be empty). buyIn/buyOut/stack/net are numbers — preserve sign on net (negative for losers). Skip any total/footer rows. Return ONLY JSON.`;
+If online_ledger, extract every player row. "name" is the bold player name; "handle" is the lighter text after "@" (may be empty string). buyIn/buyOut/stack/net are numbers — preserve sign on net (negative for losers). Skip any total/footer rows. If not online_ledger, return an empty rows array.`;
+
+const RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    type: { type: Type.STRING, enum: ['online_ledger', 'in_person_summary', 'unknown'] },
+    rows: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          handle: { type: Type.STRING },
+          buyIn: { type: Type.NUMBER },
+          buyOut: { type: Type.NUMBER },
+          stack: { type: Type.NUMBER },
+          net: { type: Type.NUMBER },
+        },
+        required: ['name', 'handle', 'buyIn', 'buyOut', 'stack', 'net'],
+      },
+    },
+  },
+  required: ['type', 'rows'],
+};
 
 async function classifyAndExtract(imageBytes, mediaType) {
-  const resp = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
-    max_tokens: 4096,
-    system: [{ type: 'text', text: VISION_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    messages: [{
+  const resp = await genai.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: [{
       role: 'user',
-      content: [
-        { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBytes.toString('base64') } },
-        { type: 'text', text: 'Classify and extract per the schema. JSON only.' },
+      parts: [
+        { inlineData: { mimeType: mediaType, data: imageBytes.toString('base64') } },
+        { text: 'Classify and extract per the schema.' },
       ],
     }],
+    config: {
+      systemInstruction: VISION_SYSTEM,
+      responseMimeType: 'application/json',
+      responseSchema: RESPONSE_SCHEMA,
+    },
   });
-  const text = resp.content.find((b) => b.type === 'text')?.text?.trim() ?? '';
-  const cleaned = text.replace(/^```json\s*|\s*```$/g, '').trim();
-  try { return JSON.parse(cleaned); }
-  catch { return { type: 'unknown', rows: [], _rawResponse: text }; }
+  try { return JSON.parse(resp.text); }
+  catch { return { type: 'unknown', rows: [], _rawResponse: resp.text }; }
 }
 
 async function downloadAttachment(url) {

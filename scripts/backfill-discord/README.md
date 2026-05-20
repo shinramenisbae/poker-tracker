@@ -6,7 +6,7 @@ One-shot script to backfill historical **online** poker sessions from a Discord 
 
 1. Connects to Discord using a bot token.
 2. Walks every thread in the configured channel.
-3. For each thread, downloads attached images and uses Claude vision to detect:
+3. For each thread, downloads attached images and uses Gemini vision to detect:
    - **White-background "Session Ledger" screenshot** → online session (will be parsed).
    - **Poker-tracker-style summary** → in-person session (skipped; already in tracker).
 4. Extracts player rows from online ledgers (`name`, `buyIn`, `buyOut`, `stack`, `net`) and applies the alias mapping in `aliases.json`.
@@ -20,7 +20,7 @@ One-shot script to backfill historical **online** poker sessions from a Discord 
 cd scripts/backfill-discord
 npm install
 cp .env.example .env
-# fill in DISCORD_TOKEN, DISCORD_CHANNEL_ID, ANTHROPIC_API_KEY
+# fill in DISCORD_TOKEN, DISCORD_CHANNEL_ID, GEMINI_API_KEY
 ```
 
 Fill in `aliases.json` with the online-name → real-name mapping. Aliases without a mapping will be flagged in the dry-run; you can fix the file and re-run `parse.js`.

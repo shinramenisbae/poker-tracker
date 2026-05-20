@@ -9,7 +9,7 @@
     "import": "node import.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
+    "@google/genai": "^2.4.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5"
   }
