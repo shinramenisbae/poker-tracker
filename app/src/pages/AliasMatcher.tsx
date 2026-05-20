@@ -15,6 +15,7 @@ export function AliasMatcher() {
   const [filter, setFilter] = useState('');
   const [newPlayer, setNewPlayer] = useState('');
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
   const [savingAlias, setSavingAlias] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,7 +62,26 @@ export function AliasMatcher() {
   const totalMapped = aliases.filter((a) => a.realName).length;
   const totalAliases = aliases.length;
 
-  // --- drag/drop handlers ---
+  // Single source of truth for "move this alias to this bucket". Used by both
+  // drag-and-drop (desktop) and tap-to-select/tap-to-assign (mobile).
+  async function assignAlias(alias: string, bucket: string) {
+    const realName = bucket === UNMAPPED_BUCKET ? null : bucket;
+    // optimistic update
+    setAliases((prev) => prev.map((a) => (a.alias === alias ? { ...a, realName } : a)));
+    setSavingAlias(alias);
+    try {
+      await setAliasMapping(alias, realName);
+      setError(null);
+    } catch (err) {
+      setError(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
+      const fresh = await fetchAliasMappings();
+      setAliases(fresh.aliases);
+    } finally {
+      setSavingAlias(null);
+    }
+  }
+
+  // --- drag/drop handlers (desktop) ---
   function handleDragStart(e: React.DragEvent, alias: string) {
     e.dataTransfer.setData('text/plain', alias);
     e.dataTransfer.effectAllowed = 'move';
@@ -72,7 +92,6 @@ export function AliasMatcher() {
     if (dragOver !== bucket) setDragOver(bucket);
   }
   function handleDragLeave(e: React.DragEvent) {
-    // Only clear if we're leaving the bucket entirely
     if (e.currentTarget === e.target) setDragOver(null);
   }
   async function handleDrop(e: React.DragEvent, bucket: string) {
@@ -80,21 +99,18 @@ export function AliasMatcher() {
     setDragOver(null);
     const alias = e.dataTransfer.getData('text/plain');
     if (!alias) return;
-    const realName = bucket === UNMAPPED_BUCKET ? null : bucket;
-    // optimistic update
-    setAliases((prev) => prev.map((a) => (a.alias === alias ? { ...a, realName } : a)));
-    setSavingAlias(alias);
-    try {
-      await setAliasMapping(alias, realName);
-      setError(null);
-    } catch (err) {
-      setError(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
-      // re-fetch to recover
-      const fresh = await fetchAliasMappings();
-      setAliases(fresh.aliases);
-    } finally {
-      setSavingAlias(null);
-    }
+    await assignAlias(alias, bucket);
+  }
+
+  // --- tap-to-select / tap-to-assign handlers (mobile + desktop) ---
+  function handleAliasTap(alias: string) {
+    setSelectedAlias((prev) => (prev === alias ? null : alias));
+  }
+  async function handleBucketTap(bucket: string) {
+    if (!selectedAlias) return;
+    const alias = selectedAlias;
+    setSelectedAlias(null);
+    await assignAlias(alias, bucket);
   }
 
   function handleAddPlayer() {
@@ -125,7 +141,7 @@ export function AliasMatcher() {
             <div>
               <h1 className="text-xl font-bold text-text-primary">Match Aliases</h1>
               <p className="text-sm text-text-secondary">
-                Drag a name card on the left onto the right player it belongs to. Progress saves automatically.
+                Tap a name on the left, then tap the player it belongs to. (Or drag-and-drop on desktop.) Progress saves automatically.
               </p>
             </div>
           </div>
@@ -142,15 +158,35 @@ export function AliasMatcher() {
         </div>
       )}
 
+      {selectedAlias && (
+        <div className="sticky top-[72px] z-10 max-w-7xl mx-auto px-4 mt-3">
+          <div className="bg-yellow-400/10 border border-yellow-400/60 rounded px-3 py-2 text-sm text-text-primary flex items-center justify-between gap-3">
+            <span>
+              Selected: <span className="font-semibold">{selectedAlias}</span>
+              <span className="text-text-secondary"> — tap a player to assign, or tap the Unmapped area to remove.</span>
+            </span>
+            <button
+              onClick={() => setSelectedAlias(null)}
+              className="px-2 py-0.5 rounded bg-bg-tertiary text-text-primary text-xs hover:bg-bg-primary"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-7xl mx-auto px-4 py-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* LEFT: unmapped aliases */}
         <section
           className={`bg-bg-secondary rounded-lg p-4 border-2 transition-colors ${
-            dragOver === UNMAPPED_BUCKET ? 'border-yellow-400' : 'border-transparent'
-          }`}
+            dragOver === UNMAPPED_BUCKET || (selectedAlias && grouped.get(UNMAPPED_BUCKET)?.indexOf(selectedAlias) === -1)
+              ? 'border-yellow-400'
+              : 'border-transparent'
+          } ${selectedAlias && grouped.get(UNMAPPED_BUCKET)?.indexOf(selectedAlias) === -1 ? 'cursor-pointer' : ''}`}
           onDragOver={(e) => handleDragOver(e, UNMAPPED_BUCKET)}
           onDragLeave={handleDragLeave}
           onDrop={(e) => handleDrop(e, UNMAPPED_BUCKET)}
+          onClick={() => handleBucketTap(UNMAPPED_BUCKET)}
         >
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-semibold text-text-primary">
@@ -161,6 +197,7 @@ export function AliasMatcher() {
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
             placeholder="Filter…"
             className="w-full mb-3 px-3 py-1.5 rounded bg-bg-primary border border-bg-tertiary text-text-primary text-sm focus:outline-none focus:border-yellow-400"
           />
@@ -175,10 +212,13 @@ export function AliasMatcher() {
                   key={alias}
                   draggable
                   onDragStart={(e) => handleDragStart(e, alias)}
-                  className={`px-3 py-1.5 rounded-full bg-bg-tertiary text-text-primary text-sm cursor-grab active:cursor-grabbing select-none border border-bg-tertiary hover:border-yellow-400 transition-colors ${
-                    savingAlias === alias ? 'opacity-50' : ''
-                  }`}
-                  title="Drag onto a player on the right"
+                  onClick={(e) => { e.stopPropagation(); handleAliasTap(alias); }}
+                  className={`px-3 py-1.5 rounded-full text-text-primary text-sm cursor-pointer select-none border transition-colors ${
+                    selectedAlias === alias
+                      ? 'bg-yellow-400/20 border-yellow-400 ring-2 ring-yellow-400'
+                      : 'bg-bg-tertiary border-bg-tertiary hover:border-yellow-400'
+                  } ${savingAlias === alias ? 'opacity-50' : ''}`}
+                  title="Tap to select, then tap a player on the right"
                 >
                   {alias}
                 </div>
@@ -213,15 +253,17 @@ export function AliasMatcher() {
             {canonicalPlayers.map((player) => {
               const chips = grouped.get(player) ?? [];
               const isOver = dragOver === player;
+              const isAssignTarget = selectedAlias != null;
               return (
                 <div
                   key={player}
                   className={`rounded-lg border-2 p-3 transition-colors ${
-                    isOver ? 'border-yellow-400 bg-bg-tertiary' : 'border-bg-tertiary bg-bg-primary'
-                  }`}
+                    isOver || isAssignTarget ? 'border-yellow-400 bg-bg-tertiary' : 'border-bg-tertiary bg-bg-primary'
+                  } ${isAssignTarget ? 'cursor-pointer' : ''}`}
                   onDragOver={(e) => handleDragOver(e, player)}
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, player)}
+                  onClick={() => handleBucketTap(player)}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="font-medium text-text-primary">{player}</div>
@@ -229,17 +271,22 @@ export function AliasMatcher() {
                   </div>
                   <div className="flex flex-wrap gap-1.5 min-h-[2rem]">
                     {chips.length === 0 ? (
-                      <div className="text-text-secondary text-xs italic self-center">Drop here</div>
+                      <div className="text-text-secondary text-xs italic self-center">
+                        {isAssignTarget ? 'Tap to assign here' : 'Drop here'}
+                      </div>
                     ) : (
                       chips.map((chip) => (
                         <div
                           key={chip}
                           draggable
                           onDragStart={(e) => handleDragStart(e, chip)}
-                          className={`px-2 py-0.5 rounded-full bg-bg-tertiary text-text-primary text-xs cursor-grab active:cursor-grabbing select-none border border-transparent hover:border-yellow-400 ${
-                            savingAlias === chip ? 'opacity-50' : ''
-                          }`}
-                          title="Drag back to Unmapped to remove"
+                          onClick={(e) => { e.stopPropagation(); handleAliasTap(chip); }}
+                          className={`px-2 py-0.5 rounded-full text-text-primary text-xs cursor-pointer select-none border transition-colors ${
+                            selectedAlias === chip
+                              ? 'bg-yellow-400/20 border-yellow-400 ring-2 ring-yellow-400'
+                              : 'bg-bg-tertiary border-transparent hover:border-yellow-400'
+                          } ${savingAlias === chip ? 'opacity-50' : ''}`}
+                          title="Tap to select, then tap Unmapped to remove (or tap another player to re-assign)"
                         >
                           {chip}
                         </div>
