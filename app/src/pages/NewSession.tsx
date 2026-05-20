@@ -40,6 +40,7 @@ export function NewSession() {
         status: 'active',
         notes,
         bankPlayerId: null,
+        gameType: 'in-person',
         players: initialPlayers.map((name) => ({
           id: generateId(),
           name,
