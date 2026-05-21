@@ -32,7 +32,7 @@ const {
   TRACKER_UI_BASE,
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-2.5-flash',
-  BOT_HTTP_PORT = '6000',
+  BOT_HTTP_PORT = '6300',
 } = process.env;
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {

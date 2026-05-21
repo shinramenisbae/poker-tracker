@@ -899,7 +899,9 @@ app.put('/api/alias-mappings/:alias', (req, res) => {
 
 // POST /api/sessions/:id/announce-discord — forward to the bot's localhost endpoint
 // so the bot creates a thread + posts results. Used by the Results page button.
-const BOT_BASE = process.env.BOT_BASE || 'http://127.0.0.1:6000';
+// Note: avoid port 6000 (X11) and other unsafe ports on Node's undici blocklist —
+// fetch will fail with "bad port". Default 6300 matches the bot's .env.example.
+const BOT_BASE = process.env.BOT_BASE || 'http://127.0.0.1:6300';
 app.post('/api/sessions/:id/announce-discord', async (req, res) => {
   try {
     const botRes = await fetch(`${BOT_BASE}/announce/${encodeURIComponent(req.params.id)}`, {
