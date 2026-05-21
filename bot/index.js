@@ -130,11 +130,19 @@ async function trackerPut(path, body) {
   return res.json();
 }
 
+// Gemini OCR is non-deterministic on aliases with weird whitespace/emoji —
+// e.g. "Simon \n\n\n\n🥵" vs "Simon 🥵" for the same image across runs.
+// Normalize on both sides (DB key and incoming row name) so a single
+// underlying alias maps to one logical key regardless of OCR variance.
+function normalizeAliasKey(s) {
+  return (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 async function fetchAliasLookup() {
   const { aliases } = await trackerGet('/alias-mappings');
   const lookup = new Map();
   for (const { alias, realName } of aliases) {
-    if (realName && realName.trim()) lookup.set(alias.toLowerCase(), realName.trim());
+    if (realName && realName.trim()) lookup.set(normalizeAliasKey(alias), realName.trim());
   }
   return lookup;
 }
@@ -205,9 +213,13 @@ async function processThread(thread) {
   const unmapped = [];
   const mappedRows = [];
   for (const row of ledgerRows) {
-    const real = aliasLookup.get((row.name || '').toLowerCase());
-    if (!real) unmapped.push(row.name);
-    else mappedRows.push({ ...row, name: real, originalAlias: row.name });
+    const real = aliasLookup.get(normalizeAliasKey(row.name));
+    if (!real) {
+      // Use the normalized form so OCR variance doesn't spawn duplicate DB rows.
+      unmapped.push(normalizeAliasKey(row.name) || row.name);
+    } else {
+      mappedRows.push({ ...row, name: real, originalAlias: row.name });
+    }
   }
 
   if (unmapped.length > 0) {
