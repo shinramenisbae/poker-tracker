@@ -130,12 +130,18 @@ async function trackerPut(path, body) {
   return res.json();
 }
 
-// Gemini OCR is non-deterministic on aliases with weird whitespace/emoji —
-// e.g. "Simon \n\n\n\n🥵" vs "Simon 🥵" for the same image across runs.
-// Normalize on both sides (DB key and incoming row name) so a single
-// underlying alias maps to one logical key regardless of OCR variance.
+// Gemini OCR is non-deterministic on aliases with weird whitespace/emoji.
+// Same image reads as "Simon \n\n\n\n🥵" one run, "Simon 🥵" the next,
+// "simon 🤮" the run after that. Normalize hard: lowercase, drop anything
+// that isn't a word/space/hyphen/dot/apostrophe (so emoji + punctuation
+// vanish), collapse whitespace. Two aliases that visually differ only by
+// emoji decoration end up the same canonical key.
 function normalizeAliasKey(s) {
-  return (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return (s || '')
+    .toLowerCase()
+    .replace(/[^\w\s\-'.]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function fetchAliasLookup() {
@@ -234,10 +240,15 @@ async function processThread(thread) {
     }
 
     // Dedup: check the thread for a prior "🛑" message from us listing the same
-    // alias set. Survives bot restarts (no in-memory state needed).
+    // alias set. Survives bot restarts (no in-memory state needed). Normalize
+    // both sides so emoji-variance in the prior message text doesn't break the
+    // comparison.
     const priorSet = await priorBlockedAliasSet(thread, client.user.id);
-    const same = priorSet && priorSet.size === uniqueUnmapped.length
-      && uniqueUnmapped.every((a) => priorSet.has(a));
+    const priorNormalized = priorSet
+      ? new Set([...priorSet].map(normalizeAliasKey).filter(Boolean))
+      : null;
+    const same = priorNormalized && priorNormalized.size === uniqueUnmapped.length
+      && uniqueUnmapped.every((a) => priorNormalized.has(a));
     if (!same) {
       const list = uniqueUnmapped.map((a) => `\`${a}\``).join(', ');
       await thread.send(
