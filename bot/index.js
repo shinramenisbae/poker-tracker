@@ -47,7 +47,6 @@ const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 // -------- in-memory caches (rebuilt on restart, that's fine) --------
 const imageClassificationCache = new Map(); // url -> {type, rows}
-const waitingThreadAliases = new Map();      // threadId -> Set<alias> we last posted a "waiting" message for
 
 // -------- Gemini vision --------
 const VISION_SYSTEM = `You analyze poker session screenshots and return strict JSON.
@@ -146,6 +145,21 @@ async function findSessionByImportMarker(threadId) {
 }
 
 // -------- Discord helpers --------
+async function priorBlockedAliasSet(thread, botUserId) {
+  // Scan recent messages for a prior "🛑" message from this bot;
+  // returns the set of aliases (between backticks) listed in it, or null.
+  // Used to dedup "Can't import yet" posts across bot restarts.
+  const messages = await thread.messages.fetch({ limit: 20 });
+  for (const msg of messages.values()) {
+    if (msg.author?.id !== botUserId) continue;
+    if (!msg.content?.startsWith('🛑')) continue;
+    const matches = [...msg.content.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+    if (matches.length === 0) continue;
+    return new Set(matches);
+  }
+  return null;
+}
+
 async function collectThreadImages(thread) {
   const images = [];
   let before;
@@ -207,22 +221,22 @@ async function processThread(thread) {
       catch (err) { console.error(`Failed to register alias "${a}":`, err.message); }
     }
 
-    const lastNotified = waitingThreadAliases.get(threadId);
-    const same = lastNotified && lastNotified.size === uniqueUnmapped.length
-      && uniqueUnmapped.every((a) => lastNotified.has(a));
+    // Dedup: check the thread for a prior "🛑" message from us listing the same
+    // alias set. Survives bot restarts (no in-memory state needed).
+    const priorSet = await priorBlockedAliasSet(thread, client.user.id);
+    const same = priorSet && priorSet.size === uniqueUnmapped.length
+      && uniqueUnmapped.every((a) => priorSet.has(a));
     if (!same) {
       const list = uniqueUnmapped.map((a) => `\`${a}\``).join(', ');
       await thread.send(
         `🛑 Can't import yet — need someone to identify these aliases first:\n${list}\n\n` +
         `Map them at ${TRACKER_UI_BASE}/#/aliases then post any message in this thread and I'll retry.`
       );
-      waitingThreadAliases.set(threadId, new Set(uniqueUnmapped));
     }
     return;
   }
 
   // 4. All aliases mapped — import.
-  waitingThreadAliases.delete(threadId);
   const sessionDate = new Date(thread.createdTimestamp ?? Date.now()).toISOString().slice(0, 10);
   const sessionTimestamp = new Date(`${sessionDate}T20:00:00Z`).getTime();
   const players = mappedRows.map((r) => ({
