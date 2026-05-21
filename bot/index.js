@@ -333,7 +333,38 @@ client.on('messageCreate', async (msg) => {
   }
 });
 
-client.once('ready', () => console.log(`Logged in as ${client.user.tag}.`));
+client.once('ready', async () => {
+  console.log(`Logged in as ${client.user.tag}.`);
+  // Catch-up scan: process every thread in the watched channel once on startup.
+  // Same logic as messageCreate — if all aliases mapped, imports + posts results;
+  // if unmapped, posts the "🛑 Can't import yet" message. Lets the bot recover
+  // from downtime and handle threads created before deploy.
+  try {
+    const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      console.warn(`Startup scan skipped: channel ${DISCORD_CHANNEL_ID} is not a GuildText.`);
+      return;
+    }
+    const threads = new Map();
+    const active = await channel.threads.fetchActive();
+    for (const [id, t] of active.threads) threads.set(id, t);
+    let before;
+    while (true) {
+      const arch = await channel.threads.fetchArchived({ type: 'public', limit: 100, ...(before ? { before } : {}) });
+      for (const [id, t] of arch.threads) threads.set(id, t);
+      if (!arch.hasMore || arch.threads.size === 0) break;
+      before = arch.threads.last().archivedTimestamp;
+    }
+    console.log(`Startup scan: ${threads.size} threads to check.`);
+    for (const thread of threads.values()) {
+      try { await processThread(thread); }
+      catch (err) { console.error(`Startup scan thread ${thread.id} (${thread.name}):`, err.message); }
+    }
+    console.log('Startup scan complete.');
+  } catch (err) {
+    console.error('Startup scan failed:', err);
+  }
+});
 await client.login(DISCORD_TOKEN);
 
 // -------- HTTP server for in-person announcements --------
