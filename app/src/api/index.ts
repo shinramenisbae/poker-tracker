@@ -182,3 +182,17 @@ export async function setAliasMapping(alias: string, realName: string | null): P
   });
   return handleResponse<AliasMapping>(response);
 }
+
+export interface AnnounceResult {
+  ok: true;
+  threadId?: string;
+  threadName?: string;
+  alreadyAnnouncedThreadId?: string;
+}
+export async function announceSessionToDiscord(sessionId: string): Promise<AnnounceResult> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/announce-discord`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return handleResponse<AnnounceResult>(response);
+}

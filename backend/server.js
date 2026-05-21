@@ -877,26 +877,41 @@ app.get('/api/alias-mappings', (req, res) => {
   });
 });
 
-// PUT /api/alias-mappings/:alias — set or clear the mapping for one alias
+// PUT /api/alias-mappings/:alias — upsert the mapping for one alias
 //   body: { realName: string | null }  (empty string or null clears the mapping)
+//   Inserts the row if it doesn't exist (so the bot can register new aliases
+//   it encounters live and have them appear in the /aliases UI for friends).
 app.put('/api/alias-mappings/:alias', (req, res) => {
   const alias = req.params.alias;
   const realName = (req.body.realName || '').trim() || null;
   const now = new Date().toISOString();
 
-  db.get('SELECT alias FROM alias_mappings WHERE alias = ?', [alias], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!row) return res.status(404).json({ error: `Alias "${alias}" not found` });
+  db.run(
+    `INSERT INTO alias_mappings (alias, realName, updatedAt) VALUES (?, ?, ?)
+     ON CONFLICT(alias) DO UPDATE SET realName = excluded.realName, updatedAt = excluded.updatedAt`,
+    [alias, realName, now],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ alias, realName });
+    }
+  );
+});
 
-    db.run(
-      'UPDATE alias_mappings SET realName = ?, updatedAt = ? WHERE alias = ?',
-      [realName, now, alias],
-      function (err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ alias, realName });
-      }
-    );
-  });
+// POST /api/sessions/:id/announce-discord — forward to the bot's localhost endpoint
+// so the bot creates a thread + posts results. Used by the Results page button.
+const BOT_BASE = process.env.BOT_BASE || 'http://127.0.0.1:6000';
+app.post('/api/sessions/:id/announce-discord', async (req, res) => {
+  try {
+    const botRes = await fetch(`${BOT_BASE}/announce/${encodeURIComponent(req.params.id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const body = await botRes.json().catch(() => ({}));
+    if (!botRes.ok) return res.status(502).json({ error: `Bot returned ${botRes.status}`, details: body });
+    res.json(body);
+  } catch (err) {
+    res.status(502).json({ error: `Could not reach bot at ${BOT_BASE}: ${err.message}` });
+  }
 });
 
 app.listen(PORT, () => {

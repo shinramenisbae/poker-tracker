@@ -1,0 +1,16 @@
+{
+  "name": "tribe-poker-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Discord bot that imports online ledger screenshots into the poker tracker and announces session results (online or in-person).",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
+  }
+}

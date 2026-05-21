@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { SettlementView } from '../components/SettlementView';
@@ -7,13 +8,35 @@ import {
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
+import { announceSessionToDiscord } from '../api';
 
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { getSession, isLoading } = useSessions();
+  const [announceState, setAnnounceState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'posting' }
+    | { kind: 'done'; threadId?: string; alreadyAnnouncedThreadId?: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
 
   const session = getSession(id || '');
+
+  // Detect prior announcement from session notes so the button reflects state.
+  const priorAnnounceMatch = session?.notes?.match(/Announced on Discord \(threadId=(\d+)\)/);
+  const previousThreadId = priorAnnounceMatch?.[1];
+
+  async function handleAnnounce() {
+    if (!session) return;
+    setAnnounceState({ kind: 'posting' });
+    try {
+      const result = await announceSessionToDiscord(session.id);
+      setAnnounceState({ kind: 'done', threadId: result.threadId, alreadyAnnouncedThreadId: result.alreadyAnnouncedThreadId });
+    } catch (err) {
+      setAnnounceState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   if (!session) {
     if (isLoading) {
@@ -104,13 +127,36 @@ export function Results() {
 
       {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 bg-surface-primary border-t border-bg-tertiary p-4">
-        <div className="max-w-3xl mx-auto">
-          <button
-            onClick={() => navigate('/')}
-            className="w-full btn-primary"
-          >
-            Back to Home
-          </button>
+        <div className="max-w-3xl mx-auto space-y-2">
+          {(announceState.kind === 'done' || previousThreadId) && (
+            <div className="bg-green-500/10 border border-green-500/40 text-green-300 rounded px-3 py-2 text-sm text-center">
+              {announceState.kind === 'done' && announceState.alreadyAnnouncedThreadId
+                ? `Already announced earlier (thread ${announceState.alreadyAnnouncedThreadId}).`
+                : announceState.kind === 'done'
+                ? `Posted to Discord (thread ${announceState.threadId}).`
+                : `Already announced (thread ${previousThreadId}).`}
+            </div>
+          )}
+          {announceState.kind === 'error' && (
+            <div className="bg-red-500/10 border border-red-500/40 text-red-300 rounded px-3 py-2 text-sm text-center">
+              {announceState.message}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={handleAnnounce}
+              disabled={announceState.kind === 'posting' || announceState.kind === 'done' || !!previousThreadId}
+              className="flex-1 btn-primary disabled:opacity-50"
+            >
+              {announceState.kind === 'posting' ? 'Posting…' : previousThreadId ? '✓ Posted to Discord' : '📣 Post to Discord'}
+            </button>
+            <button
+              onClick={() => navigate('/')}
+              className="flex-1 btn-secondary"
+            >
+              Back to Home
+            </button>
+          </div>
         </div>
       </footer>
     </div>
