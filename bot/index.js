@@ -174,16 +174,21 @@ async function priorBlockedAliasSet(thread, botUserId) {
   return null;
 }
 
-async function collectThreadImages(thread) {
+async function collectThreadAttachments(thread) {
+  // Single pass over all messages; returns both images and CSVs.
   const images = [];
+  const csvs = [];
   let before;
   while (true) {
     const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     if (batch.size === 0) break;
     for (const msg of batch.values()) {
       for (const att of msg.attachments.values()) {
+        const name = att.name || '';
         const ct = (att.contentType || '').toLowerCase();
-        if (ct.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(att.name || '')) {
+        if (/\.csv$/i.test(name) || ct.includes('csv')) {
+          csvs.push({ url: att.url, name, createdAt: msg.createdTimestamp });
+        } else if (ct.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
           images.push({ url: att.url, createdAt: msg.createdTimestamp });
         }
       }
@@ -191,7 +196,61 @@ async function collectThreadImages(thread) {
     if (batch.size < 100) break;
     before = batch.last().id;
   }
-  return images.sort((a, b) => a.createdAt - b.createdAt);
+  images.sort((a, b) => a.createdAt - b.createdAt);
+  csvs.sort((a, b) => b.createdAt - a.createdAt); // newest CSV first (if multiple, use latest)
+  return { images, csvs };
+}
+
+// -------- PokerNow CSV --------
+function parseCsvLine(line) {
+  const out = [];
+  let inQuotes = false;
+  let current = '';
+  for (const c of line) {
+    if (c === '"') inQuotes = !inQuotes;
+    else if (c === ',' && !inQuotes) { out.push(current); current = ''; }
+    else current += c;
+  }
+  out.push(current);
+  return out;
+}
+
+function parsePokernowCsv(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return { rows: [], dateOverride: null };
+  const headers = parseCsvLine(lines[0]).map((h) => h.trim());
+  const required = ['player_nickname', 'buy_in', 'stack', 'net'];
+  if (!required.every((h) => headers.includes(h))) {
+    return { rows: [], dateOverride: null, error: 'CSV headers do not match PokerNow format' };
+  }
+  const records = lines.slice(1).map((line) => {
+    const values = parseCsvLine(line);
+    const r = {};
+    headers.forEach((h, i) => { r[h] = (values[i] ?? '').trim(); });
+    return r;
+  });
+  const rows = records
+    .filter((r) => r.player_nickname)
+    .map((r) => ({
+      name: r.player_nickname,
+      handle: r.player_id || '',
+      buyIn: parseFloat(r.buy_in) || 0,
+      buyOut: parseFloat(r.buy_out) || 0,
+      stack: parseFloat(r.stack) || 0,
+      net: parseFloat(r.net) || 0,
+    }));
+  const starts = records
+    .map((r) => r.session_start_at)
+    .filter((s) => s && s.length >= 10)
+    .sort();
+  const dateOverride = starts[0] ? new Date(starts[0]).toISOString().slice(0, 10) : null;
+  return { rows, dateOverride };
+}
+
+async function downloadCsvText(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`CSV download HTTP ${res.status}`);
+  return res.text();
 }
 
 // -------- Core: process a thread that may have an online ledger --------
@@ -203,16 +262,38 @@ async function processThread(thread) {
     return; // idempotent; nothing to do
   }
 
-  // 2. Collect + classify images
-  const images = await collectThreadImages(thread);
-  if (images.length === 0) return;
+  // 2. Collect attachments and decide source.
+  const { images, csvs } = await collectThreadAttachments(thread);
+  let ledgerRows = [];
+  let dateOverride = null;
+  let source = 'none';
 
-  const ledgerRows = [];
-  for (const img of images) {
-    const result = await classifyImage(img.url);
-    if (result.type === 'online_ledger') ledgerRows.push(...(result.rows || []));
+  // Prefer CSV when present (deterministic, exact, no Gemini calls).
+  if (csvs.length > 0) {
+    try {
+      const text = await downloadCsvText(csvs[0].url); // newest CSV in thread
+      const parsed = parsePokernowCsv(text);
+      if (parsed.rows.length > 0) {
+        ledgerRows = parsed.rows;
+        dateOverride = parsed.dateOverride;
+        source = 'csv';
+      }
+    } catch (err) {
+      console.error(`CSV parse failed in thread ${threadId}:`, err.message);
+    }
   }
-  if (ledgerRows.length === 0) return;
+
+  // Fall back to OCR if no CSV or CSV unusable.
+  if (ledgerRows.length === 0) {
+    if (images.length === 0) return;
+    for (const img of images) {
+      const result = await classifyImage(img.url);
+      if (result.type === 'online_ledger') ledgerRows.push(...(result.rows || []));
+    }
+    if (ledgerRows.length === 0) return;
+    source = 'ocr';
+  }
+  console.log(`Thread ${threadId} (${thread.name}): ${ledgerRows.length} rows from ${source}`);
 
   // 3. Alias check
   const aliasLookup = await fetchAliasLookup();
@@ -259,8 +340,11 @@ async function processThread(thread) {
     return;
   }
 
-  // 4. All aliases mapped — import.
-  const sessionDate = new Date(thread.createdTimestamp ?? Date.now()).toISOString().slice(0, 10);
+  // 4. All aliases mapped — import. CSV's session_start_at beats the thread's
+  // creation timestamp (more accurate, especially for late-evening sessions
+  // that cross midnight UTC).
+  const sessionDate = dateOverride
+    || new Date(thread.createdTimestamp ?? Date.now()).toISOString().slice(0, 10);
   const sessionTimestamp = new Date(`${sessionDate}T20:00:00Z`).getTime();
   const players = mappedRows.map((r) => ({
     id: randomUUID(),
