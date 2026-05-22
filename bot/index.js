@@ -155,7 +155,12 @@ async function fetchAliasLookup() {
 
 async function findSessionByImportMarker(threadId) {
   const sessions = await trackerGet('/sessions');
-  return sessions.find((s) => (s.notes || '').includes(`threadId=${threadId}`));
+  // Prefer the new dedicated column; fall back to the legacy notes marker so
+  // sessions imported before the column existed are still detected.
+  return sessions.find((s) =>
+    s.discordThreadId === threadId
+    || (s.notes || '').includes(`threadId=${threadId}`)
+  );
 }
 
 // -------- Discord helpers --------
@@ -215,7 +220,13 @@ function parseCsvLine(line) {
   return out;
 }
 
+// PokerNow CSV gives one row per "session window" — every time a player
+// joins, leaves, or rebuys creates a fresh row. Same player across multiple
+// windows must be aggregated, or they show up N times in the results.
+// player_id is unique-per-session even for guests, so aggregate by that.
+// Values are in chips; divide by POKERNOW_CHIP_DIVISOR (default 100) for $.
 function parsePokernowCsv(text) {
+  const divisor = Number(process.env.POKERNOW_CHIP_DIVISOR || '100');
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) return { rows: [], dateOverride: null };
   const headers = parseCsvLine(lines[0]).map((h) => h.trim());
@@ -229,16 +240,44 @@ function parsePokernowCsv(text) {
     headers.forEach((h, i) => { r[h] = (values[i] ?? '').trim(); });
     return r;
   });
-  const rows = records
-    .filter((r) => r.player_nickname)
-    .map((r) => ({
-      name: r.player_nickname,
-      handle: r.player_id || '',
-      buyIn: parseFloat(r.buy_in) || 0,
-      buyOut: parseFloat(r.buy_out) || 0,
-      stack: parseFloat(r.stack) || 0,
-      net: parseFloat(r.net) || 0,
-    }));
+
+  // Aggregate by player_id (or nickname if id missing). Sum buy_in, buy_out, net in chips.
+  const byPlayer = new Map();
+  for (const r of records) {
+    if (!r.player_nickname) continue;
+    const key = r.player_id || `__name__:${r.player_nickname}`;
+    if (!byPlayer.has(key)) {
+      byPlayer.set(key, {
+        name: r.player_nickname,
+        handle: r.player_id || '',
+        buyInChips: 0,
+        buyOutChips: 0,
+        netChips: 0,
+      });
+    }
+    const agg = byPlayer.get(key);
+    agg.buyInChips += parseFloat(r.buy_in) || 0;
+    agg.buyOutChips += parseFloat(r.buy_out) || 0;
+    agg.netChips += parseFloat(r.net) || 0;
+  }
+
+  // Convert chips → dollars, and synthesize stack so that buyOut + stack = correct cashOut.
+  // (cashOut for a player = buy_outs + final_stack across all windows, which is also
+  //  buy_in + net by definition.)
+  const rows = [...byPlayer.values()].map((a) => {
+    const buyIn = a.buyInChips / divisor;
+    const buyOut = a.buyOutChips / divisor;
+    const net = a.netChips / divisor;
+    return {
+      name: a.name,
+      handle: a.handle,
+      buyIn,
+      buyOut,
+      stack: buyIn + net - buyOut, // makes buyOut + stack - buyIn = net (parser invariant)
+      net,
+    };
+  });
+
   const starts = records
     .map((r) => r.session_start_at)
     .filter((s) => s && s.length >= 10)
@@ -354,9 +393,10 @@ async function processThread(thread) {
   }));
   const created = await trackerPost('/sessions', {
     date: sessionDate,
-    notes: `Imported from Discord (threadId=${threadId})`,
+    notes: `Online session (${sessionDate})`,
     gameType: 'online',
     status: 'completed',
+    discordThreadId: threadId,
     players,
   });
   for (let i = 0; i < mappedRows.length; i++) {
@@ -497,10 +537,13 @@ app.post('/announce/:sessionId', async (req, res) => {
   try {
     const session = await trackerGet(`/sessions/${sessionId}`);
 
-    // Already announced?
-    const alreadyMarker = (session.notes || '').match(/Announced on Discord \(threadId=(\d+)\)/);
-    if (alreadyMarker) {
-      return res.json({ ok: true, alreadyAnnouncedThreadId: alreadyMarker[1] });
+    // Already announced? (prefer new column; legacy notes fallback for migration)
+    if (session.discordThreadId) {
+      return res.json({ ok: true, alreadyAnnouncedThreadId: session.discordThreadId });
+    }
+    const legacyMarker = (session.notes || '').match(/Announced on Discord \(threadId=(\d+)\)/);
+    if (legacyMarker) {
+      return res.json({ ok: true, alreadyAnnouncedThreadId: legacyMarker[1] });
     }
 
     const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
@@ -516,9 +559,8 @@ app.post('/announce/:sessionId', async (req, res) => {
     });
     await postResultsMessage(thread, session);
 
-    // Mark session as announced (append to notes)
-    const newNotes = (session.notes ? session.notes + ' ' : '') + `Announced on Discord (threadId=${thread.id})`;
-    await trackerPut(`/sessions/${sessionId}`, { notes: newNotes });
+    // Mark session as announced via the dedicated column (don't touch user's notes).
+    await trackerPut(`/sessions/${sessionId}`, { discordThreadId: thread.id });
 
     res.json({ ok: true, threadId: thread.id, threadName });
   } catch (err) {

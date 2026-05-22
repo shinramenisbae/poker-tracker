@@ -61,6 +61,12 @@ db.serialize(() => {
   db.run(`ALTER TABLE sessions ADD COLUMN gameType TEXT NOT NULL DEFAULT 'in-person'`, (err) => {
     // Ignore error if column already exists
   });
+
+  // Migration: add discordThreadId column for clean Discord linkage tracking
+  // (was previously embedded in notes, which made session titles ugly).
+  db.run(`ALTER TABLE sessions ADD COLUMN discordThreadId TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
 });
 
 module.exports = db;

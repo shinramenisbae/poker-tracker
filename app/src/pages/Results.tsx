@@ -23,9 +23,11 @@ export function Results() {
 
   const session = getSession(id || '');
 
-  // Detect prior announcement from session notes so the button reflects state.
-  const priorAnnounceMatch = session?.notes?.match(/Announced on Discord \(threadId=(\d+)\)/);
-  const previousThreadId = priorAnnounceMatch?.[1];
+  // Detect prior announcement so the button reflects state.
+  // Prefer the dedicated column; fall back to the legacy notes marker for
+  // sessions announced before the discordThreadId column existed.
+  const legacyMatch = session?.notes?.match(/Announced on Discord \(threadId=(\d+)\)/);
+  const previousThreadId = session?.discordThreadId ?? legacyMatch?.[1] ?? null;
 
   async function handleAnnounce() {
     if (!session) return;

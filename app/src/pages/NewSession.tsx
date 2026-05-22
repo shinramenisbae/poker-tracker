@@ -41,6 +41,7 @@ export function NewSession() {
         notes,
         bankPlayerId: null,
         gameType: 'in-person',
+        discordThreadId: null,
         players: initialPlayers.map((name) => ({
           id: generateId(),
           name,

@@ -8,6 +8,7 @@ export interface Session {
   bankPlayerId: string | null;
   notes: string;
   gameType: 'in-person' | 'online';
+  discordThreadId: string | null;
 }
 
 export interface Player {
