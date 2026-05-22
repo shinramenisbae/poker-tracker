@@ -348,6 +348,25 @@ async function processThread(thread) {
     }
   }
 
+  // 3b. Aggregate again by canonical name. Reason: a single person often
+  // shows up with multiple PokerNow player_ids in one session (logged-in
+  // account + guest, or multiple guest joins). The CSV parser correctly
+  // splits those into separate rows by player_id, but they should collapse
+  // into one tracker Player after alias mapping resolves them to the same
+  // real person.
+  const byCanonical = new Map();
+  for (const r of mappedRows) {
+    if (!byCanonical.has(r.name)) {
+      byCanonical.set(r.name, { name: r.name, handle: r.handle, buyIn: 0, buyOut: 0, stack: 0, net: 0 });
+    }
+    const agg = byCanonical.get(r.name);
+    agg.buyIn += Number(r.buyIn) || 0;
+    agg.buyOut += Number(r.buyOut) || 0;
+    agg.net += Number(r.net) || 0;
+    agg.stack = agg.buyIn + agg.net - agg.buyOut; // maintain invariant
+  }
+  const aggregatedRows = [...byCanonical.values()];
+
   if (unmapped.length > 0) {
     // Block import; tell humans to map.
     const uniqueUnmapped = [...new Set(unmapped)].sort();
@@ -385,7 +404,7 @@ async function processThread(thread) {
   const sessionDate = dateOverride
     || new Date(thread.createdTimestamp ?? Date.now()).toISOString().slice(0, 10);
   const sessionTimestamp = new Date(`${sessionDate}T20:00:00Z`).getTime();
-  const players = mappedRows.map((r) => ({
+  const players = aggregatedRows.map((r) => ({
     id: randomUUID(),
     name: r.name,
     paymentMethod: 'cash',
@@ -399,8 +418,8 @@ async function processThread(thread) {
     discordThreadId: threadId,
     players,
   });
-  for (let i = 0; i < mappedRows.length; i++) {
-    const buyIn = Number(mappedRows[i].buyIn) || 0;
+  for (let i = 0; i < aggregatedRows.length; i++) {
+    const buyIn = Number(aggregatedRows[i].buyIn) || 0;
     if (buyIn <= 0) continue;
     await trackerPost(`/sessions/${created.id}/players/${players[i].id}/buyins`, {
       amount: buyIn, method: 'cash', isRebuy: false,
