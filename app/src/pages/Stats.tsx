@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { getTotalBuyIn, getProfitLoss, formatCurrency, formatDate } from '../utils/calculations';
@@ -273,6 +273,20 @@ function LifetimePnLChart({
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
+  // Measure container width so the SVG can match it exactly (preserveAspectRatio
+  // wasn't filling the modal — chart was stuck at 400×200 centred).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(640);
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0].contentRect.width;
+      if (w > 0) setWidth(w);
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
   // Calculate cumulative P&L
   const cumulativeData = useMemo(() => {
     const sorted = [...sessionHistory].sort(
@@ -293,10 +307,12 @@ function LifetimePnLChart({
     return <p className="text-text-secondary text-center py-8">No session data</p>;
   }
 
-  // Chart dimensions
-  const padding = 40;
-  const chartWidth = 400 - padding * 2;
-  const chartHeight = 200 - padding * 2;
+  // Chart dimensions — height scales with width on wider screens for a less
+  // squashed look, but capped so it stays reasonable on a mobile portrait card.
+  const height = Math.min(360, Math.max(200, Math.round(width * 0.42)));
+  const padding = 44;
+  const chartWidth = width - padding * 2;
+  const chartHeight = height - padding * 2;
 
   // Calculate scales
   const pnlValues = cumulativeData.map((d) => d.pnl);
@@ -325,12 +341,12 @@ function LifetimePnLChart({
   );
 
   return (
-    <div className="relative" style={{ width: '100%', height: 200 }}>
+    <div ref={containerRef} className="relative w-full" style={{ height }}>
       <svg
         width="100%"
         height="100%"
-        viewBox={`0 0 400 200`}
-        preserveAspectRatio="xMidYMid meet"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
         className="overflow-visible"
       >
         {/* Grid lines */}
@@ -439,8 +455,8 @@ function LifetimePnLChart({
         <div
           className="absolute bg-bg-secondary border border-bg-tertiary rounded-lg px-3 py-2 shadow-lg pointer-events-none z-10"
           style={{
-            left: `${(getX(hoveredIndex) / 400) * 100}%`,
-            top: `${(getY(cumulativeData[hoveredIndex].pnl) / 200) * 100}%`,
+            left: `${(getX(hoveredIndex) / width) * 100}%`,
+            top: `${(getY(cumulativeData[hoveredIndex].pnl) / height) * 100}%`,
             transform: 'translate(-50%, -120%)',
           }}
         >
