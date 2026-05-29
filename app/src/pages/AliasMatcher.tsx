@@ -5,6 +5,8 @@ import {
   setAliasMapping,
   mergePlayers,
   deletePlayer,
+  deleteAlias,
+  deleteAllUnmappedAliases,
   type AliasMapping,
 } from '../api';
 
@@ -128,6 +130,34 @@ export function AliasMatcher() {
     setNewPlayer('');
   }
 
+  async function handleDeleteSingleAlias(alias: string) {
+    // Optimistic: remove from local state, then call API.
+    setAliases((prev) => prev.filter((a) => a.alias !== alias));
+    try {
+      await deleteAlias(alias);
+      setError(null);
+    } catch (err) {
+      setError(`Failed to delete alias: ${err instanceof Error ? err.message : String(err)}`);
+      // Resync on error
+      const fresh = await fetchAliasMappings();
+      setAliases(fresh.aliases);
+    }
+  }
+
+  async function handleClearAllUnmapped() {
+    const unmappedCount = aliases.filter((a) => !a.realName).length;
+    if (unmappedCount === 0) return;
+    if (!window.confirm(`Delete all ${unmappedCount} unmapped aliases? They'll regenerate automatically if they appear in future online sessions.`)) return;
+    try {
+      await deleteAllUnmappedAliases();
+      const fresh = await fetchAliasMappings();
+      setAliases(fresh.aliases);
+      setError(null);
+    } catch (err) {
+      setError(`Failed to clear: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   async function handleDeleteConfirm() {
     if (!deleteTarget || deleting) return;
     const name = deleteTarget;
@@ -235,6 +265,15 @@ export function AliasMatcher() {
             <h2 className="font-semibold text-text-primary">
               Unmapped ({visibleUnmapped.length}{filter ? ` of ${unmapped.length}` : ''})
             </h2>
+            {unmapped.length > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleClearAllUnmapped(); }}
+                className="text-xs text-text-secondary hover:text-red-400 px-2 py-1 rounded hover:bg-bg-tertiary"
+                title="Delete every unmapped alias (they'll come back if seen again in new sessions)"
+              >
+                🧹 Clear all
+              </button>
+            )}
           </div>
           <input
             type="text"
@@ -256,14 +295,21 @@ export function AliasMatcher() {
                   draggable
                   onDragStart={(e) => handleDragStart(e, alias)}
                   onClick={(e) => { e.stopPropagation(); handleAliasTap(alias); }}
-                  className={`px-3 py-1.5 rounded-full text-text-primary text-sm cursor-pointer select-none border transition-colors ${
+                  className={`group pl-3 pr-1 py-1.5 rounded-full text-text-primary text-sm cursor-pointer select-none border transition-colors flex items-center gap-1 ${
                     selectedAlias === alias
                       ? 'bg-yellow-400/20 border-yellow-400 ring-2 ring-yellow-400'
                       : 'bg-bg-tertiary border-bg-tertiary hover:border-yellow-400'
                   } ${savingAlias === alias ? 'opacity-50' : ''}`}
                   title="Tap to select, then tap a player on the right"
                 >
-                  {alias}
+                  <span>{alias}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeleteSingleAlias(alias); }}
+                    className="text-text-secondary hover:text-red-400 hover:bg-bg-primary/40 rounded-full w-5 h-5 flex items-center justify-center text-xs ml-0.5"
+                    title={`Delete alias "${alias}"`}
+                  >
+                    ×
+                  </button>
                 </div>
               ))
             )}

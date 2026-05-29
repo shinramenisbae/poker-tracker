@@ -270,3 +270,17 @@ export async function deletePlayer(name: string): Promise<DeletePlayerResult> {
   });
   return handleResponse<DeletePlayerResult>(response);
 }
+
+export async function deleteAlias(alias: string): Promise<{ ok: true; alias: string; deleted: number }> {
+  const response = await fetch(`${API_BASE_URL}/alias-mappings/${encodeURIComponent(alias)}`, {
+    method: 'DELETE',
+  });
+  return handleResponse(response);
+}
+
+export async function deleteAllUnmappedAliases(): Promise<{ ok: true; deleted: number }> {
+  const response = await fetch(`${API_BASE_URL}/alias-mappings?onlyUnmapped=true`, {
+    method: 'DELETE',
+  });
+  return handleResponse(response);
+}

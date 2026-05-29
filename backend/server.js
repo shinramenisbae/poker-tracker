@@ -1120,6 +1120,32 @@ app.post('/api/players/merge', (req, res) => {
   });
 });
 
+// DELETE /api/alias-mappings/:alias — remove a single alias row.
+// Only affects the alias_mappings table; no historical data is touched
+// (sessions/EV reference canonical names, not aliases).
+app.delete('/api/alias-mappings/:alias', (req, res) => {
+  const alias = req.params.alias;
+  if (!alias) return res.status(400).json({ error: 'alias required' });
+  db.run('DELETE FROM alias_mappings WHERE alias = ?', [alias], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ ok: true, alias, deleted: this.changes });
+  });
+});
+
+// DELETE /api/alias-mappings?onlyUnmapped=true — bulk delete.
+// With ?onlyUnmapped=true (the default and only supported mode for safety),
+// removes every row where realName is null or empty.
+app.delete('/api/alias-mappings', (req, res) => {
+  const onlyUnmapped = req.query.onlyUnmapped !== 'false';
+  if (!onlyUnmapped) {
+    return res.status(400).json({ error: 'Only ?onlyUnmapped=true is supported (full wipe would destroy your alias graph).' });
+  }
+  db.run(`DELETE FROM alias_mappings WHERE realName IS NULL OR TRIM(realName) = ''`, [], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ ok: true, deleted: this.changes });
+  });
+});
+
 // DELETE /api/players/:name — fully wipe a player.
 // Removes their per-session player rows (cascades to their buy-ins), every
 // alias mapping that pointed at them (and any DB row keyed by that name as
