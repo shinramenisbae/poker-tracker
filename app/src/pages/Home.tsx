@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { SessionCard } from '../components/SessionCard';
+import { PokerEasterEgg } from '../components/PokerEasterEgg';
 
 export function Home() {
   console.log('HOME: Rendering');
@@ -9,6 +10,7 @@ export function Home() {
   const { sessions, deleteSession, isLoading, error, refreshSessions } = useSessions();
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [easterOpen, setEasterOpen] = useState(false);
 
   console.log('HOME: sessions=', sessions.length, 'isLoading=', isLoading, 'error=', error);
 
@@ -38,7 +40,16 @@ export function Home() {
       {/* Header */}
       <header className="sticky top-0 bg-bg-primary/95 backdrop-blur-sm border-b border-bg-tertiary z-10">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-text-primary">🎲 Tribe Poker Tracker</h1>
+          <h1 className="text-2xl font-bold text-text-primary">
+            <button
+              onClick={() => setEasterOpen(true)}
+              className="hover:scale-110 active:scale-95 transition-transform cursor-pointer"
+              title="🎰"
+            >
+              🎲
+            </button>{' '}
+            Tribe Poker Tracker
+          </h1>
           <div className="flex items-center gap-2">
             {sessions.length > 0 && (
               <button
@@ -163,6 +174,8 @@ export function Home() {
       >
         +
       </button>
+
+      {easterOpen && <PokerEasterEgg onClose={() => setEasterOpen(false)} />}
     </div>
   );
 }
