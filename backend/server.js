@@ -114,7 +114,9 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json());
+// Bumped from default 100KB to 20MB so we can ingest PokerNow hand logs
+// (a busy session can be a few MB of CSV text).
+app.use(express.json({ limit: '20mb' }));
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -894,6 +896,161 @@ app.put('/api/alias-mappings/:alias', (req, res) => {
     function (err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ alias, realName });
+    }
+  );
+});
+
+// --- Hand log / all-in EV API ---
+
+const { computeSessionEv } = require('./handlog/ev');
+
+// Same normalization the bot uses so we collapse OCR / emoji variance.
+function normalizeAliasKey(s) {
+  return (s || '').toLowerCase().replace(/[^\w\s\-'.]/g, '').replace(/\s+/g, ' ').trim();
+}
+// Strip "name @ player_id" → just "name".
+function stripPlayerId(rawKey) {
+  const at = rawKey.lastIndexOf(' @ ');
+  return at >= 0 ? rawKey.slice(0, at) : rawKey;
+}
+
+function loadAliasCanonicalMap() {
+  return new Promise((resolve, reject) => {
+    db.all('SELECT alias, realName FROM alias_mappings', [], (err, rows) => {
+      if (err) return reject(err);
+      const map = new Map();
+      for (const r of rows) {
+        if (r.realName && r.realName.trim()) map.set(normalizeAliasKey(r.alias), r.realName.trim());
+      }
+      resolve(map);
+    });
+  });
+}
+
+function canonicalNameOf(rawPlayerKey, aliasMap) {
+  const nick = stripPlayerId(rawPlayerKey);
+  return aliasMap.get(normalizeAliasKey(nick)) || nick;
+}
+
+// POST /api/sessions/:id/handlog — body: { rawLog: string }
+// Parses, computes EV, stores. Wipes prior hand_evs for this session first.
+app.post('/api/sessions/:id/handlog', async (req, res) => {
+  const sessionId = req.params.id;
+  const rawLog = req.body && req.body.rawLog;
+  if (!rawLog || typeof rawLog !== 'string') return res.status(400).json({ error: 'rawLog (string) required in body' });
+
+  db.get('SELECT id FROM sessions WHERE id = ?', [sessionId], async (err, sess) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!sess) return res.status(404).json({ error: 'Session not found' });
+
+    let result;
+    try {
+      result = computeSessionEv(rawLog, { samples: 8000 });
+    } catch (parseErr) {
+      return res.status(400).json({ error: `Parse/compute failed: ${parseErr.message}` });
+    }
+
+    const aliasMap = await loadAliasCanonicalMap();
+    const now = new Date().toISOString();
+    const eligibleCount = result.hands.filter((h) => h.hasAllInEv).length;
+
+    db.serialize(() => {
+      db.run('DELETE FROM hand_evs WHERE sessionId = ?', [sessionId]);
+      db.run(
+        `INSERT INTO hand_logs (sessionId, rawLog, parsedAt, totalHands, eligibleEvHands)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(sessionId) DO UPDATE SET
+           rawLog = excluded.rawLog,
+           parsedAt = excluded.parsedAt,
+           totalHands = excluded.totalHands,
+           eligibleEvHands = excluded.eligibleEvHands`,
+        [sessionId, rawLog, now, result.hands.length, eligibleCount]
+      );
+
+      const stmt = db.prepare(
+        `INSERT INTO hand_evs (id, sessionId, handNumber, handIndex, playerName, actualNet, expectedNet, isAllInEv, equity, gameType)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      result.hands.forEach((h, idx) => {
+        for (const [rawKey, v] of Object.entries(h.perPlayer)) {
+          const id = generateId();
+          stmt.run(
+            id, sessionId, h.handNumber, idx,
+            canonicalNameOf(rawKey, aliasMap),
+            v.actualNet, v.expectedNet,
+            v.isAllInEv ? 1 : 0,
+            null, // equity stored only when isAllInEv; computed but not currently exposed per-row
+            h.gameType
+          );
+        }
+      });
+      stmt.finalize((err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({
+          ok: true,
+          totalHands: result.hands.length,
+          eligibleEvHands: eligibleCount,
+          players: result.players.map((p) => canonicalNameOf(p, aliasMap)),
+        });
+      });
+    });
+  });
+});
+
+// GET /api/sessions/:id/ev — chart series for one session.
+// Returns { players: [name], series: [{ handNumber, perPlayer: {name: {actualNet, expectedNet, isAllInEv}} }] }
+app.get('/api/sessions/:id/ev', (req, res) => {
+  const sessionId = req.params.id;
+  db.all(
+    `SELECT handNumber, handIndex, playerName, actualNet, expectedNet, isAllInEv, gameType
+       FROM hand_evs WHERE sessionId = ? ORDER BY handIndex, playerName`,
+    [sessionId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const byIndex = new Map();
+      const players = new Set();
+      for (const r of rows) {
+        players.add(r.playerName);
+        if (!byIndex.has(r.handIndex)) {
+          byIndex.set(r.handIndex, { handIndex: r.handIndex, handNumber: r.handNumber, gameType: r.gameType, perPlayer: {} });
+        }
+        byIndex.get(r.handIndex).perPlayer[r.playerName] = {
+          actualNet: r.actualNet,
+          expectedNet: r.expectedNet,
+          isAllInEv: !!r.isAllInEv,
+        };
+      }
+      res.json({
+        players: [...players].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+        series: [...byIndex.values()].sort((a, b) => a.handIndex - b.handIndex),
+      });
+    }
+  );
+});
+
+// GET /api/luck-leaderboard — cross-session aggregated luck per canonical player.
+app.get('/api/luck-leaderboard', (req, res) => {
+  db.all(
+    `SELECT playerName,
+            COUNT(DISTINCT sessionId) AS sessions,
+            SUM(isAllInEv) AS allInHands,
+            SUM(CASE WHEN isAllInEv = 1 THEN actualNet ELSE 0 END) AS actualOnAllIns,
+            SUM(CASE WHEN isAllInEv = 1 THEN expectedNet ELSE 0 END) AS expectedOnAllIns
+       FROM hand_evs
+      GROUP BY playerName
+      HAVING allInHands > 0
+      ORDER BY (actualOnAllIns - expectedOnAllIns) DESC`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows.map((r) => ({
+        playerName: r.playerName,
+        sessions: r.sessions,
+        allInHands: r.allInHands,
+        actualOnAllIns: r.actualOnAllIns,
+        expectedOnAllIns: r.expectedOnAllIns,
+        luckDelta: r.actualOnAllIns - r.expectedOnAllIns,
+      })));
     }
   );
 });

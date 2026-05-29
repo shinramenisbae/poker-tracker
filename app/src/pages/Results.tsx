@@ -146,17 +146,23 @@ export function Results() {
           )}
           <div className="flex gap-2">
             <button
+              onClick={() => navigate(`/session/${session.id}/ev`)}
+              className="flex-1 btn-secondary"
+            >
+              🎰 Who's a luck box?
+            </button>
+            <button
               onClick={handleAnnounce}
               disabled={announceState.kind === 'posting' || announceState.kind === 'done' || !!previousThreadId}
               className="flex-1 btn-primary disabled:opacity-50"
             >
-              {announceState.kind === 'posting' ? 'Posting…' : previousThreadId ? '✓ Posted to Discord' : '📣 Post to Discord'}
+              {announceState.kind === 'posting' ? 'Posting…' : previousThreadId ? '✓ Posted' : '📣 Post to Discord'}
             </button>
             <button
               onClick={() => navigate('/')}
               className="flex-1 btn-secondary"
             >
-              Back to Home
+              Home
             </button>
           </div>
         </div>

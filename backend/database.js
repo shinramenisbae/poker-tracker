@@ -52,6 +52,39 @@ db.serialize(() => {
     )
   `);
 
+  // hand_logs: one row per session that's had a PokerNow hand log uploaded.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS hand_logs (
+      sessionId TEXT PRIMARY KEY,
+      rawLog TEXT NOT NULL,
+      parsedAt TEXT NOT NULL,
+      totalHands INTEGER NOT NULL,
+      eligibleEvHands INTEGER NOT NULL,
+      FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+
+  // hand_evs: per-player per-hand actual vs expected for charts and leaderboards.
+  // playerName stores the raw PokerNow nickname; canonical resolution happens
+  // at query time via the alias_mappings table.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS hand_evs (
+      id TEXT PRIMARY KEY,
+      sessionId TEXT NOT NULL,
+      handNumber INTEGER NOT NULL,
+      handIndex INTEGER NOT NULL,
+      playerName TEXT NOT NULL,
+      actualNet REAL NOT NULL,
+      expectedNet REAL NOT NULL,
+      isAllInEv INTEGER NOT NULL DEFAULT 0,
+      equity REAL,
+      gameType TEXT NOT NULL,
+      FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_hand_evs_session ON hand_evs(sessionId)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_hand_evs_player ON hand_evs(playerName)`);
+
   // Migration: add method column if it doesn't exist (for existing DBs)
   db.run(`ALTER TABLE buyIns ADD COLUMN method TEXT DEFAULT 'cash'`, (err) => {
     // Ignore error if column already exists

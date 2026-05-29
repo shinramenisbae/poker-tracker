@@ -196,3 +196,50 @@ export async function announceSessionToDiscord(sessionId: string): Promise<Annou
   });
   return handleResponse<AnnounceResult>(response);
 }
+
+// Hand-log / all-in EV API
+export interface EvHandPoint {
+  actualNet: number;
+  expectedNet: number;
+  isAllInEv: boolean;
+}
+export interface EvSeriesEntry {
+  handIndex: number;
+  handNumber: number;
+  gameType: 'holdem' | 'omaha';
+  perPlayer: Record<string, EvHandPoint>;
+}
+export interface EvSeriesResponse {
+  players: string[];
+  series: EvSeriesEntry[];
+}
+export async function fetchSessionEv(sessionId: string): Promise<EvSeriesResponse> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/ev`);
+  return handleResponse<EvSeriesResponse>(response);
+}
+export interface UploadHandLogResult {
+  ok: true;
+  totalHands: number;
+  eligibleEvHands: number;
+  players: string[];
+}
+export async function uploadHandLog(sessionId: string, rawLog: string): Promise<UploadHandLogResult> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/handlog`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rawLog }),
+  });
+  return handleResponse<UploadHandLogResult>(response);
+}
+export interface LuckLeaderboardEntry {
+  playerName: string;
+  sessions: number;
+  allInHands: number;
+  actualOnAllIns: number;
+  expectedOnAllIns: number;
+  luckDelta: number;
+}
+export async function fetchLuckLeaderboard(): Promise<LuckLeaderboardEntry[]> {
+  const response = await fetch(`${API_BASE_URL}/luck-leaderboard`);
+  return handleResponse<LuckLeaderboardEntry[]>(response);
+}

@@ -6,6 +6,7 @@ import { Results } from './pages/Results';
 import { Settings } from './pages/Settings';
 import { Stats } from './pages/Stats';
 import { AliasMatcher } from './pages/AliasMatcher';
+import { SessionEv } from './pages/SessionEv';
 import './index.css';
 
 function App() {
@@ -24,6 +25,7 @@ function App() {
           <Route path="/stats" element={<Stats />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/aliases" element={<AliasMatcher />} />
+          <Route path="/session/:id/ev" element={<SessionEv />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

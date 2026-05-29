@@ -180,9 +180,12 @@ async function priorBlockedAliasSet(thread, botUserId) {
 }
 
 async function collectThreadAttachments(thread) {
-  // Single pass over all messages; returns both images and CSVs.
+  // Single pass over all messages; returns images, ledger CSVs, and hand log CSVs.
+  // PokerNow filename conventions: ledger CSVs start with "ledger_",
+  // hand logs start with "poker_now_log_". Both are .csv.
   const images = [];
-  const csvs = [];
+  const ledgerCsvs = [];
+  const handLogCsvs = [];
   let before;
   while (true) {
     const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
@@ -191,8 +194,11 @@ async function collectThreadAttachments(thread) {
       for (const att of msg.attachments.values()) {
         const name = att.name || '';
         const ct = (att.contentType || '').toLowerCase();
-        if (/\.csv$/i.test(name) || ct.includes('csv')) {
-          csvs.push({ url: att.url, name, createdAt: msg.createdTimestamp });
+        const isCsv = /\.csv$/i.test(name) || ct.includes('csv');
+        if (isCsv && /^poker_now_log_/i.test(name)) {
+          handLogCsvs.push({ url: att.url, name, createdAt: msg.createdTimestamp });
+        } else if (isCsv) {
+          ledgerCsvs.push({ url: att.url, name, createdAt: msg.createdTimestamp });
         } else if (ct.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
           images.push({ url: att.url, createdAt: msg.createdTimestamp });
         }
@@ -202,8 +208,9 @@ async function collectThreadAttachments(thread) {
     before = batch.last().id;
   }
   images.sort((a, b) => a.createdAt - b.createdAt);
-  csvs.sort((a, b) => b.createdAt - a.createdAt); // newest CSV first (if multiple, use latest)
-  return { images, csvs };
+  ledgerCsvs.sort((a, b) => b.createdAt - a.createdAt); // newest first
+  handLogCsvs.sort((a, b) => b.createdAt - a.createdAt);
+  return { images, csvs: ledgerCsvs, handLogCsvs };
 }
 
 // -------- PokerNow CSV --------
@@ -292,17 +299,76 @@ async function downloadCsvText(url) {
   return res.text();
 }
 
+// -------- Hand log upload / prompt --------
+
+async function isHandLogUploaded(sessionId) {
+  try {
+    const ev = await trackerGet(`/sessions/${sessionId}/ev`);
+    return Array.isArray(ev.series) && ev.series.length > 0;
+  } catch { return false; }
+}
+
+async function priorBotMessageStartsWith(thread, botUserId, prefix) {
+  const messages = await thread.messages.fetch({ limit: 20 });
+  for (const msg of messages.values()) {
+    if (msg.author?.id !== botUserId) continue;
+    if (msg.content?.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+async function processHandLogIfNeeded(thread, sessionId, handLogCsvs) {
+  if (await isHandLogUploaded(sessionId)) return;
+
+  // Skip in-person sessions — PokerNow logs don't exist for those.
+  try {
+    const session = await trackerGet(`/sessions/${sessionId}`);
+    if (session.gameType !== 'online') return;
+  } catch { return; }
+
+  if (handLogCsvs && handLogCsvs.length > 0) {
+    // Upload it.
+    try {
+      const text = await (await fetch(handLogCsvs[0].url)).text();
+      const res = await fetch(`${TRACKER_API_BASE}/sessions/${sessionId}/handlog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rawLog: text }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const result = await res.json();
+      await thread.send(
+        `🎰 Hand log parsed: ${result.eligibleEvHands} qualifying all-in EV hands across ${result.totalHands} hands.\n` +
+        `See who's a luck box: ${TRACKER_UI_BASE}/#/session/${sessionId}/ev`
+      );
+    } catch (err) {
+      console.error(`Hand log upload failed for ${sessionId}:`, err.message);
+      await thread.send(`⚠️ Couldn't parse the hand log: ${err.message}`);
+    }
+    return;
+  }
+
+  // No log attached — prompt once.
+  if (await priorBotMessageStartsWith(thread, client.user.id, '🎰 Drop the PokerNow hand log')) return;
+  await thread.send(
+    `🎰 Drop the PokerNow hand log here (from the Ledger → Download log button) if you want to see all-in EV vs actual — who got coolered, who sucked out, etc.`
+  );
+}
+
 // -------- Core: process a thread that may have an online ledger --------
 async function processThread(thread) {
   const threadId = thread.id;
 
-  // 1. Already imported?
-  if (await findSessionByImportMarker(threadId)) {
-    return; // idempotent; nothing to do
+  // 1. If already imported, just handle the hand-log side and return.
+  const existingSession = await findSessionByImportMarker(threadId);
+  if (existingSession) {
+    const { handLogCsvs } = await collectThreadAttachments(thread);
+    await processHandLogIfNeeded(thread, existingSession.id, handLogCsvs);
+    return;
   }
 
   // 2. Collect attachments and decide source.
-  const { images, csvs } = await collectThreadAttachments(thread);
+  const { images, csvs, handLogCsvs } = await collectThreadAttachments(thread);
   let ledgerRows = [];
   let dateOverride = null;
   let source = 'none';
@@ -429,6 +495,9 @@ async function processThread(thread) {
   // 5. Post results message.
   const full = await trackerGet(`/sessions/${created.id}`);
   await postResultsMessage(thread, full);
+
+  // 6. Hand log: upload if attached, else prompt for it.
+  await processHandLogIfNeeded(thread, created.id, handLogCsvs);
 }
 
 // -------- Results message --------
