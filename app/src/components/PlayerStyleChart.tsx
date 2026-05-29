@@ -74,13 +74,6 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
 
           <Tooltip
             cursor={{ strokeDasharray: '3 3' }}
-            contentStyle={{ background: '#1a1a1a', border: '1px solid #444', borderRadius: 4, color: '#eee', fontSize: 12 }}
-            formatter={(value: any, name: string, ctx: any) => {
-              const p = ctx?.payload;
-              if (name === 'VPIP' || name === 'PFR') return [`${value}%`, name];
-              if (name === 'hands') return [p?.hands, 'Hands dealt'];
-              return [value, name];
-            }}
             content={({ payload }) => {
               if (!payload || payload.length === 0) return null;
               const p: any = payload[0].payload;
