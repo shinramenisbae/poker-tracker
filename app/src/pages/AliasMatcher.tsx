@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   fetchAliasMappings,
   setAliasMapping,
+  mergePlayers,
   type AliasMapping,
 } from '../api';
 
@@ -17,6 +18,8 @@ export function AliasMatcher() {
   const [dragOver, setDragOver] = useState<string | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
   const [savingAlias, setSavingAlias] = useState<string | null>(null);
+  const [mergeSource, setMergeSource] = useState<string | null>(null);
+  const [merging, setMerging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -120,6 +123,25 @@ export function AliasMatcher() {
       setCanonicalPlayers((prev) => [...prev, name].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })));
     }
     setNewPlayer('');
+  }
+
+  async function handleMergeConfirm(into: string) {
+    if (!mergeSource || merging) return;
+    const from = mergeSource;
+    setMerging(true);
+    try {
+      await mergePlayers(from, into);
+      // Refetch — server state has changed across many rows
+      const fresh = await fetchAliasMappings();
+      setAliases(fresh.aliases);
+      setCanonicalPlayers(fresh.canonicalPlayers);
+      setMergeSource(null);
+      setError(null);
+    } catch (err) {
+      setError(`Merge failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setMerging(false);
+    }
   }
 
   if (loading) {
@@ -267,7 +289,16 @@ export function AliasMatcher() {
                 >
                   <div className="flex items-center justify-between mb-2">
                     <div className="font-medium text-text-primary">{player}</div>
-                    <div className="text-xs text-text-secondary">{chips.length} mapped</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-text-secondary">{chips.length} mapped</div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setMergeSource(player); }}
+                        className="text-xs text-text-secondary hover:text-yellow-400 px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
+                        title={`Merge "${player}" into another player`}
+                      >
+                        ⤴ merge
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5 min-h-[2rem]">
                     {chips.length === 0 ? (
@@ -299,6 +330,90 @@ export function AliasMatcher() {
           </div>
         </section>
       </main>
+
+      {mergeSource && (
+        <MergeModal
+          source={mergeSource}
+          candidates={canonicalPlayers.filter((p) => p !== mergeSource)}
+          merging={merging}
+          onCancel={() => setMergeSource(null)}
+          onConfirm={handleMergeConfirm}
+        />
+      )}
+    </div>
+  );
+}
+
+function MergeModal({
+  source, candidates, merging, onCancel, onConfirm,
+}: {
+  source: string;
+  candidates: string[];
+  merging: boolean;
+  onCancel: () => void;
+  onConfirm: (into: string) => void;
+}) {
+  const [filter, setFilter] = useState('');
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null);
+  const visible = filter
+    ? candidates.filter((c) => c.toLowerCase().includes(filter.toLowerCase()))
+    : candidates;
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4" onClick={onCancel}>
+      <div className="bg-bg-secondary rounded-lg w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="p-4 border-b border-bg-tertiary">
+          <h2 className="font-semibold text-text-primary">
+            Merge <span className="text-yellow-400">{source}</span> into…
+          </h2>
+          <p className="text-xs text-text-secondary mt-1">
+            All aliases, sessions, and stats for "{source}" will move to the player you pick. This can't be undone.
+          </p>
+        </div>
+        <div className="p-3 border-b border-bg-tertiary">
+          <input
+            autoFocus
+            type="text"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter players…"
+            className="w-full px-3 py-1.5 rounded bg-bg-primary border border-bg-tertiary text-text-primary text-sm focus:outline-none focus:border-yellow-400"
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          {visible.length === 0 ? (
+            <div className="text-text-secondary text-sm italic text-center py-4">No matches.</div>
+          ) : (
+            visible.map((c) => (
+              <button
+                key={c}
+                onClick={() => setConfirmTarget(c)}
+                className={`w-full text-left px-3 py-2 rounded text-text-primary text-sm hover:bg-bg-tertiary ${
+                  confirmTarget === c ? 'bg-bg-tertiary' : ''
+                }`}
+              >
+                {c}
+              </button>
+            ))
+          )}
+        </div>
+        <div className="p-3 border-t border-bg-tertiary flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={merging}
+            className="px-3 py-1.5 rounded bg-bg-tertiary text-text-primary text-sm hover:bg-bg-primary disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => confirmTarget && onConfirm(confirmTarget)}
+            disabled={!confirmTarget || merging}
+            className="px-3 py-1.5 rounded bg-yellow-400 text-bg-primary text-sm font-semibold disabled:opacity-40"
+          >
+            {merging ? 'Merging…' : confirmTarget ? `Merge into "${confirmTarget}"` : 'Pick a target'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

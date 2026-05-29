@@ -243,3 +243,18 @@ export async function fetchLuckLeaderboard(): Promise<LuckLeaderboardEntry[]> {
   const response = await fetch(`${API_BASE_URL}/luck-leaderboard`);
   return handleResponse<LuckLeaderboardEntry[]>(response);
 }
+
+export interface MergePlayersResult {
+  ok: true;
+  from: string;
+  into: string;
+  updated: { players: number; aliasMappings: number; handEvs: number };
+}
+export async function mergePlayers(from: string, into: string): Promise<MergePlayersResult> {
+  const response = await fetch(`${API_BASE_URL}/players/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, into }),
+  });
+  return handleResponse<MergePlayersResult>(response);
+}

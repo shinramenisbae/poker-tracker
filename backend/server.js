@@ -1055,6 +1055,39 @@ app.get('/api/luck-leaderboard', (req, res) => {
   );
 });
 
+// POST /api/players/merge — collapse one canonical player into another.
+// Updates everywhere the name appears: per-session players, alias mappings,
+// hand-level EV rows. Irreversible (no undo) — use carefully.
+//   body: { from: string, into: string }
+app.post('/api/players/merge', (req, res) => {
+  const from = (req.body && req.body.from || '').trim();
+  const into = (req.body && req.body.into || '').trim();
+  if (!from || !into) return res.status(400).json({ error: 'from and into required' });
+  if (from === into) return res.status(400).json({ error: 'from and into must differ' });
+
+  const now = new Date().toISOString();
+  let counts = { players: 0, aliasMappings: 0, handEvs: 0 };
+  db.serialize(() => {
+    db.run('UPDATE players SET name = ? WHERE name = ?', [into, from], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.players = this.changes;
+    });
+    db.run(
+      'UPDATE alias_mappings SET realName = ?, updatedAt = ? WHERE realName = ?',
+      [into, now, from],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        counts.aliasMappings = this.changes;
+      }
+    );
+    db.run('UPDATE hand_evs SET playerName = ? WHERE playerName = ?', [into, from], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.handEvs = this.changes;
+      res.json({ ok: true, from, into, updated: counts });
+    });
+  });
+});
+
 // POST /api/sessions/:id/announce-discord — forward to the bot's localhost endpoint
 // so the bot creates a thread + posts results. Used by the Results page button.
 // Note: avoid port 6000 (X11) and other unsafe ports on Node's undici blocklist —
