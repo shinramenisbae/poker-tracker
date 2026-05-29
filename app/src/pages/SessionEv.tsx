@@ -14,6 +14,7 @@ export function SessionEv() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [focusedPlayer, setFocusedPlayer] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -115,14 +116,31 @@ export function SessionEv() {
           </div>
         ) : (
           <>
-            <div className="mb-3 text-xs text-text-secondary">
-              <span className="text-green-400 font-semibold">Win/loss</span> = actual chip change per hand.
-              <span className="text-orange-400 font-semibold ml-2">All-in EV</span> = same, but all-in outcomes replaced by equity-weighted expected value.
-              Gap between the lines = how lucky/unlucky on all-ins.
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+              {focusedPlayer ? (
+                <button
+                  onClick={() => setFocusedPlayer(null)}
+                  className="px-3 py-1 rounded-full bg-yellow-400 text-bg-primary font-semibold hover:bg-yellow-300"
+                >
+                  ← Show all players
+                </button>
+              ) : (
+                <span className="text-text-secondary">Tap any player to focus.</span>
+              )}
+              <span className="text-text-secondary ml-auto">
+                <span className="text-green-400 font-semibold">Win/loss</span> vs{' '}
+                <span className="text-orange-400 font-semibold">All-in EV</span> — gap = luck.
+              </span>
             </div>
             <div className="space-y-4">
-              {sortedPlayers.map((player) => (
-                <PlayerChartCard key={player} player={player} data={data!} />
+              {(focusedPlayer ? [focusedPlayer] : sortedPlayers).map((player) => (
+                <PlayerChartCard
+                  key={player}
+                  player={player}
+                  data={data!}
+                  focused={focusedPlayer === player}
+                  onToggleFocus={() => setFocusedPlayer((prev) => (prev === player ? null : player))}
+                />
               ))}
             </div>
           </>
@@ -132,7 +150,14 @@ export function SessionEv() {
   );
 }
 
-function PlayerChartCard({ player, data }: { player: string; data: EvSeriesResponse }) {
+function PlayerChartCard({
+  player, data, focused, onToggleFocus,
+}: {
+  player: string;
+  data: EvSeriesResponse;
+  focused: boolean;
+  onToggleFocus: () => void;
+}) {
   const { chartData, totals } = useMemo(() => {
     let cumA = 0, cumE = 0;
     let allInHands = 0;
@@ -155,19 +180,28 @@ function PlayerChartCard({ player, data }: { player: string; data: EvSeriesRespo
   const fmt = (n: number) => (n >= 0 ? '+' : '−') + '$' + Math.abs(n).toFixed(2);
   const deltaColor = totals.delta >= 0 ? 'text-green-400' : 'text-red-400';
   const deltaEmoji = totals.delta >= 0 ? '🍀' : '🥶';
+  const chartHeight = focused ? 420 : 180;
 
   return (
-    <div className="bg-bg-secondary rounded-lg p-3">
-      <div className="flex items-center justify-between mb-2 px-1">
-        <h3 className="font-semibold text-text-primary">{player}</h3>
+    <div className={`bg-bg-secondary rounded-lg p-3 ${focused ? 'ring-2 ring-yellow-400' : ''}`}>
+      <button
+        type="button"
+        onClick={onToggleFocus}
+        className="w-full flex items-center justify-between mb-2 px-1 cursor-pointer hover:bg-bg-tertiary/30 rounded transition-colors"
+        title={focused ? 'Click to unfocus' : 'Click to focus this player'}
+      >
+        <h3 className="font-semibold text-text-primary flex items-center gap-2">
+          {player}
+          {focused && <span className="text-xs text-yellow-400">(focused)</span>}
+        </h3>
         <div className="flex gap-4 text-xs">
           <span><span className="text-text-secondary">W/L</span> <span className={totals.actual >= 0 ? 'text-green-400' : 'text-red-400'}>{fmt(totals.actual)}</span></span>
           <span><span className="text-text-secondary">EV</span> <span className={totals.expected >= 0 ? 'text-green-400' : 'text-red-400'}>{fmt(totals.expected)}</span></span>
           <span className={`font-semibold ${deltaColor}`}>{fmt(totals.delta)} {deltaEmoji}</span>
           <span className="text-text-secondary">{totals.allInHands} AI</span>
         </div>
-      </div>
-      <ResponsiveContainer width="100%" height={180}>
+      </button>
+      <ResponsiveContainer width="100%" height={chartHeight}>
         <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -16 }}>
           <CartesianGrid stroke="#333" strokeDasharray="3 3" />
           <XAxis dataKey="hand" stroke="#999" tick={{ fill: '#888', fontSize: 10 }} interval="preserveStartEnd" />
@@ -177,8 +211,8 @@ function PlayerChartCard({ player, data }: { player: string; data: EvSeriesRespo
             formatter={(value) => `$${Number(value ?? 0).toFixed(2)}`}
             labelFormatter={(label) => `Hand ${label}`}
           />
-          <Line type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={1.75} dot={false} name="Win/loss" isAnimationActive={false} />
-          <Line type="monotone" dataKey="expected" stroke="#f59e0b" strokeWidth={1.75} dot={false} name="All-in EV" isAnimationActive={false} />
+          <Line type="monotone" dataKey="actual" stroke="#22c55e" strokeWidth={focused ? 2.25 : 1.75} dot={false} name="Win/loss" isAnimationActive={false} />
+          <Line type="monotone" dataKey="expected" stroke="#f59e0b" strokeWidth={focused ? 2.25 : 1.75} dot={false} name="All-in EV" isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>
