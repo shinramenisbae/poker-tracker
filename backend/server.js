@@ -1120,6 +1120,48 @@ app.post('/api/players/merge', (req, res) => {
   });
 });
 
+// DELETE /api/players/:name — fully wipe a player.
+// Removes their per-session player rows (cascades to their buy-ins), every
+// alias mapping that pointed at them (and any DB row keyed by that name as
+// an alias), every hand-EV row, and records them in removed_canonicals so
+// the seed/sessions lists don't reintroduce them. Irreversible.
+app.delete('/api/players/:name', (req, res) => {
+  const name = (req.params.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const now = new Date().toISOString();
+  const counts = { players: 0, aliasMappingsByRealName: 0, aliasMappingsByKey: 0, handEvs: 0 };
+
+  db.serialize(() => {
+    db.run('DELETE FROM players WHERE name = ?', [name], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.players = this.changes;
+    });
+    db.run('DELETE FROM alias_mappings WHERE realName = ?', [name], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.aliasMappingsByRealName = this.changes;
+    });
+    // Also wipe alias rows where this name IS the alias key (player created
+    // as both an alias and a canonical at some point).
+    db.run('DELETE FROM alias_mappings WHERE alias = ?', [name], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.aliasMappingsByKey = this.changes;
+    });
+    db.run('DELETE FROM hand_evs WHERE playerName = ?', [name], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.handEvs = this.changes;
+    });
+    db.run(
+      `INSERT INTO removed_canonicals (name, mergedInto, removedAt) VALUES (?, NULL, ?)
+       ON CONFLICT(name) DO UPDATE SET mergedInto = NULL, removedAt = excluded.removedAt`,
+      [name, now],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ ok: true, name, deleted: counts });
+      }
+    );
+  });
+});
+
 // POST /api/sessions/:id/announce-discord — forward to the bot's localhost endpoint
 // so the bot creates a thread + posts results. Used by the Results page button.
 // Note: avoid port 6000 (X11) and other unsafe ports on Node's undici blocklist —

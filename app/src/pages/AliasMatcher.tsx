@@ -4,6 +4,7 @@ import {
   fetchAliasMappings,
   setAliasMapping,
   mergePlayers,
+  deletePlayer,
   type AliasMapping,
 } from '../api';
 
@@ -20,6 +21,8 @@ export function AliasMatcher() {
   const [savingAlias, setSavingAlias] = useState<string | null>(null);
   const [mergeSource, setMergeSource] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -125,6 +128,24 @@ export function AliasMatcher() {
     setNewPlayer('');
   }
 
+  async function handleDeleteConfirm() {
+    if (!deleteTarget || deleting) return;
+    const name = deleteTarget;
+    setDeleting(true);
+    try {
+      await deletePlayer(name);
+      const fresh = await fetchAliasMappings();
+      setAliases(fresh.aliases);
+      setCanonicalPlayers(fresh.canonicalPlayers);
+      setDeleteTarget(null);
+      setError(null);
+    } catch (err) {
+      setError(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleMergeConfirm(into: string) {
     if (!mergeSource || merging) return;
     const from = mergeSource;
@@ -161,9 +182,9 @@ export function AliasMatcher() {
               ←
             </button>
             <div>
-              <h1 className="text-xl font-bold text-text-primary">Match Aliases</h1>
+              <h1 className="text-xl font-bold text-text-primary">Manage Players</h1>
               <p className="text-sm text-text-secondary">
-                Tap a name on the left, then tap the player it belongs to. (Or drag-and-drop on desktop.) Progress saves automatically.
+                Tap a name on the left, then tap the player it belongs to. Or merge / delete a player from the row buttons on the right. (Drag-and-drop also works on desktop.)
               </p>
             </div>
           </div>
@@ -298,6 +319,13 @@ export function AliasMatcher() {
                       >
                         ⤴ merge
                       </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteTarget(player); }}
+                        className="text-xs text-text-secondary hover:text-red-400 px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
+                        title={`Delete "${player}" and all their data`}
+                      >
+                        🗑 delete
+                      </button>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5 min-h-[2rem]">
@@ -338,6 +366,16 @@ export function AliasMatcher() {
           merging={merging}
           onCancel={() => setMergeSource(null)}
           onConfirm={handleMergeConfirm}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteModal
+          target={deleteTarget}
+          aliasCount={(grouped.get(deleteTarget) ?? []).length}
+          deleting={deleting}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={handleDeleteConfirm}
         />
       )}
     </div>
@@ -411,6 +449,66 @@ function MergeModal({
             className="px-3 py-1.5 rounded bg-yellow-400 text-bg-primary text-sm font-semibold disabled:opacity-40"
           >
             {merging ? 'Merging…' : confirmTarget ? `Merge into "${confirmTarget}"` : 'Pick a target'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteModal({
+  target, aliasCount, deleting, onCancel, onConfirm,
+}: {
+  target: string;
+  aliasCount: number;
+  deleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [acknowledged, setAcknowledged] = useState(false);
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4" onClick={onCancel}>
+      <div className="bg-bg-secondary rounded-lg w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="p-4 border-b border-bg-tertiary">
+          <h2 className="font-semibold text-text-primary">
+            Delete <span className="text-red-400">{target}</span>?
+          </h2>
+        </div>
+        <div className="p-4 space-y-3 text-sm">
+          <p className="text-text-primary">
+            This removes <span className="font-semibold">{target}</span> from every session, every alias mapping
+            ({aliasCount} alias{aliasCount === 1 ? '' : 'es'} currently pointing here will become unmapped), and
+            the all-in EV history. Their buy-ins / cash-outs are wiped — sessions they were in will become
+            unbalanced.
+          </p>
+          <p className="text-red-300">This can't be undone.</p>
+          <label className="flex items-start gap-2 cursor-pointer pt-1">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="text-text-primary text-xs">
+              I understand this permanently deletes all of <span className="font-semibold">{target}</span>'s data.
+            </span>
+          </label>
+        </div>
+        <div className="p-3 border-t border-bg-tertiary flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="px-3 py-1.5 rounded bg-bg-tertiary text-text-primary text-sm hover:bg-bg-primary disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!acknowledged || deleting}
+            className="px-3 py-1.5 rounded bg-red-500 text-white text-sm font-semibold hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {deleting ? 'Deleting…' : `Delete ${target}`}
           </button>
         </div>
       </div>

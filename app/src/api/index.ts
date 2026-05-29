@@ -258,3 +258,15 @@ export async function mergePlayers(from: string, into: string): Promise<MergePla
   });
   return handleResponse<MergePlayersResult>(response);
 }
+
+export interface DeletePlayerResult {
+  ok: true;
+  name: string;
+  deleted: { players: number; aliasMappingsByRealName: number; aliasMappingsByKey: number; handEvs: number };
+}
+export async function deletePlayer(name: string): Promise<DeletePlayerResult> {
+  const response = await fetch(`${API_BASE_URL}/players/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<DeletePlayerResult>(response);
+}
