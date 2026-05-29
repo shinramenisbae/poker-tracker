@@ -85,6 +85,17 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_hand_evs_session ON hand_evs(sessionId)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_hand_evs_player ON hand_evs(playerName)`);
 
+  // removed_canonicals: canonical player names that were merged into another.
+  // The /aliases UI filters seed-derived canonicals through this so merged-away
+  // names don't keep reappearing on every page load.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS removed_canonicals (
+      name TEXT PRIMARY KEY,
+      mergedInto TEXT,
+      removedAt TEXT NOT NULL
+    )
+  `);
+
   // Migration: add method column if it doesn't exist (for existing DBs)
   db.run(`ALTER TABLE buyIns ADD COLUMN method TEXT DEFAULT 'cash'`, (err) => {
     // Ignore error if column already exists

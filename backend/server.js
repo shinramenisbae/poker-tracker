@@ -866,16 +866,29 @@ app.delete('/api/import/spreadsheet', (req, res) => {
 app.get('/api/alias-mappings', (req, res) => {
   db.all('SELECT alias, realName FROM alias_mappings ORDER BY alias COLLATE NOCASE', [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
+    db.all('SELECT name FROM removed_canonicals', [], (err2, removedRows) => {
+      if (err2) return res.status(500).json({ error: err2.message });
 
-    // Build the set of canonical names: seed file + any realName values friends have added
-    const canonical = new Set(aliasSeed.canonical_players || []);
-    for (const r of rows) {
-      if (r.realName && r.realName.trim()) canonical.add(r.realName.trim());
-    }
+      // Names currently used as the target of any mapping — these always stay
+      // visible (someone explicitly aliased to them).
+      const activeRealNames = new Set();
+      for (const r of rows) {
+        if (r.realName && r.realName.trim()) activeRealNames.add(r.realName.trim());
+      }
+      const removed = new Set(removedRows.map((r) => r.name));
 
-    res.json({
-      aliases: rows.map((r) => ({ alias: r.alias, realName: r.realName || null })),
-      canonicalPlayers: [...canonical].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+      // Start from seed canonicals, filter out merged-away names, then add
+      // anything currently in use as an alias target.
+      const canonical = new Set();
+      for (const c of (aliasSeed.canonical_players || [])) {
+        if (!removed.has(c)) canonical.add(c);
+      }
+      for (const n of activeRealNames) canonical.add(n);
+
+      res.json({
+        aliases: rows.map((r) => ({ alias: r.alias, realName: r.realName || null })),
+        canonicalPlayers: [...canonical].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+      });
     });
   });
 });
@@ -1083,6 +1096,16 @@ app.post('/api/players/merge', (req, res) => {
     db.run('UPDATE hand_evs SET playerName = ? WHERE playerName = ?', [into, from], function (err) {
       if (err) return res.status(500).json({ error: err.message });
       counts.handEvs = this.changes;
+
+      // Record the merge so the seed list stops re-injecting the old name.
+      // Also clear any prior removal of `into` (in case it was previously
+      // merged away and is now being re-used as a target).
+      db.run(
+        `INSERT INTO removed_canonicals (name, mergedInto, removedAt) VALUES (?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET mergedInto = excluded.mergedInto, removedAt = excluded.removedAt`,
+        [from, into, now]
+      );
+      db.run('DELETE FROM removed_canonicals WHERE name = ?', [into]);
       res.json({ ok: true, from, into, updated: counts });
     });
   });
