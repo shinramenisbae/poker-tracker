@@ -187,6 +187,13 @@ export function SessionDetail() {
               </h1>
               <p className="text-sm text-text-secondary">{formatDate(session.date)}</p>
             </div>
+            <button
+              onClick={() => navigate(`/session/${session.id}/ev`)}
+              className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
+              title="Who's a luck box? (all-in EV chart)"
+            >
+              🎰
+            </button>
             <span
               className={`badge ${
                 session.status === 'active' ? 'badge-active' : 'badge-completed'
