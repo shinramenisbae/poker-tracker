@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { getTotalBuyIn, getProfitLoss, formatCurrency, formatDate } from '../utils/calculations';
 import { LuckLeaderboard } from '../components/LuckLeaderboard';
+import { PlayerStyleChartCard } from '../components/PlayerStyleChartCard';
 
 interface PlayerStats {
   name: string;
@@ -204,6 +205,11 @@ export function Stats() {
               </div>
             )}
           </div>
+        </section>
+
+        {/* Player styles scatter chart (VPIP × PFR across all logged sessions) */}
+        <section className="mb-6">
+          <PlayerStyleChartCard />
         </section>
 
         {/* Luck box leaderboard (all-in EV across sessions with hand logs) */}

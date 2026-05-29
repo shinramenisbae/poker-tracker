@@ -85,6 +85,26 @@ db.serialize(() => {
   db.run(`CREATE INDEX IF NOT EXISTS idx_hand_evs_session ON hand_evs(sessionId)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_hand_evs_player ON hand_evs(playerName)`);
 
+  // player_session_stats: per-(session, canonical player) counters that feed
+  // VPIP / PFR / AF on the player-style scatter chart. Computed from the same
+  // hand log that produces hand_evs.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS player_session_stats (
+      id TEXT PRIMARY KEY,
+      sessionId TEXT NOT NULL,
+      playerName TEXT NOT NULL,
+      handsDealt INTEGER NOT NULL DEFAULT 0,
+      vpipHands INTEGER NOT NULL DEFAULT 0,
+      pfrHands INTEGER NOT NULL DEFAULT 0,
+      postflopBets INTEGER NOT NULL DEFAULT 0,
+      postflopRaises INTEGER NOT NULL DEFAULT 0,
+      postflopCalls INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pss_session ON player_session_stats(sessionId)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_pss_player ON player_session_stats(playerName)`);
+
   // removed_canonicals: canonical player names that were merged into another.
   // The /aliases UI filters seed-derived canonicals through this so merged-away
   // names don't keep reappearing on every page load.

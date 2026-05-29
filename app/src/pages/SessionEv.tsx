@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { fetchSessionEv, uploadHandLog, type EvSeriesResponse } from '../api';
 import { useSessions } from '../hooks/useStorage';
+import { SessionPlayerStyleChartCard } from '../components/PlayerStyleChartCard';
 
 export function SessionEv() {
   const { id } = useParams<{ id: string }>();
@@ -143,6 +144,11 @@ export function SessionEv() {
                 />
               ))}
             </div>
+            {id && !focusedPlayer && (
+              <div className="mt-6">
+                <SessionPlayerStyleChartCard sessionId={id} />
+              </div>
+            )}
           </>
         )}
       </main>

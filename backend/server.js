@@ -925,6 +925,8 @@ app.put('/api/alias-mappings/:alias', (req, res) => {
 // --- Hand log / all-in EV API ---
 
 const { computeSessionEv } = require('./handlog/ev');
+const { parseHandLog } = require('./handlog/parse');
+const { computeStatsFromHands, derive: deriveStats } = require('./handlog/stats');
 
 // Same normalization the bot uses so we collapse OCR / emoji variance.
 function normalizeAliasKey(s) {
@@ -976,8 +978,18 @@ app.post('/api/sessions/:id/handlog', async (req, res) => {
     const now = new Date().toISOString();
     const eligibleCount = result.hands.filter((h) => h.hasAllInEv).length;
 
+    // Also compute style stats from the same parsed hands
+    let styleStatsByRaw;
+    try {
+      const parsedHands = parseHandLog(rawLog);
+      styleStatsByRaw = computeStatsFromHands(parsedHands);
+    } catch (e) {
+      styleStatsByRaw = {};
+    }
+
     db.serialize(() => {
       db.run('DELETE FROM hand_evs WHERE sessionId = ?', [sessionId]);
+      db.run('DELETE FROM player_session_stats WHERE sessionId = ?', [sessionId]);
       db.run(
         `INSERT INTO hand_logs (sessionId, rawLog, parsedAt, totalHands, eligibleEvHands)
          VALUES (?, ?, ?, ?, ?)
@@ -1006,7 +1018,32 @@ app.post('/api/sessions/:id/handlog', async (req, res) => {
           );
         }
       });
-      stmt.finalize((err) => {
+      stmt.finalize();
+
+      // Aggregate style stats by canonical name, then insert.
+      const byCanonical = {};
+      for (const [rawKey, c] of Object.entries(styleStatsByRaw || {})) {
+        const name = canonicalNameOf(rawKey, aliasMap);
+        if (!byCanonical[name]) {
+          byCanonical[name] = { handsDealt: 0, vpipHands: 0, pfrHands: 0, postflopBets: 0, postflopRaises: 0, postflopCalls: 0 };
+        }
+        const agg = byCanonical[name];
+        agg.handsDealt += c.handsDealt;
+        agg.vpipHands += c.vpipHands;
+        agg.pfrHands += c.pfrHands;
+        agg.postflopBets += c.postflopBets;
+        agg.postflopRaises += c.postflopRaises;
+        agg.postflopCalls += c.postflopCalls;
+      }
+      const statStmt = db.prepare(
+        `INSERT INTO player_session_stats
+         (id, sessionId, playerName, handsDealt, vpipHands, pfrHands, postflopBets, postflopRaises, postflopCalls)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      for (const [name, c] of Object.entries(byCanonical)) {
+        statStmt.run(generateId(), sessionId, name, c.handsDealt, c.vpipHands, c.pfrHands, c.postflopBets, c.postflopRaises, c.postflopCalls);
+      }
+      statStmt.finalize((err) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({
           ok: true,
@@ -1017,6 +1054,44 @@ app.post('/api/sessions/:id/handlog', async (req, res) => {
       });
     });
   });
+});
+
+// GET /api/sessions/:id/player-stats — VPIP/PFR/AF per player for this session.
+app.get('/api/sessions/:id/player-stats', (req, res) => {
+  db.all(
+    `SELECT playerName, handsDealt, vpipHands, pfrHands, postflopBets, postflopRaises, postflopCalls
+       FROM player_session_stats
+      WHERE sessionId = ?
+      ORDER BY handsDealt DESC`,
+    [req.params.id],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows.map((r) => ({ playerName: r.playerName, ...deriveStats(r) })));
+    }
+  );
+});
+
+// GET /api/player-stats — aggregated across all sessions with logs.
+app.get('/api/player-stats', (req, res) => {
+  db.all(
+    `SELECT playerName,
+            SUM(handsDealt) AS handsDealt,
+            SUM(vpipHands) AS vpipHands,
+            SUM(pfrHands) AS pfrHands,
+            SUM(postflopBets) AS postflopBets,
+            SUM(postflopRaises) AS postflopRaises,
+            SUM(postflopCalls) AS postflopCalls,
+            COUNT(DISTINCT sessionId) AS sessions
+       FROM player_session_stats
+      GROUP BY playerName
+     HAVING SUM(handsDealt) > 0
+      ORDER BY SUM(handsDealt) DESC`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows.map((r) => ({ playerName: r.playerName, sessions: r.sessions, ...deriveStats(r) })));
+    }
+  );
 });
 
 // GET /api/sessions/:id/ev — chart series for one session.

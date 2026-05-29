@@ -284,3 +284,23 @@ export async function deleteAllUnmappedAliases(): Promise<{ ok: true; deleted: n
   });
   return handleResponse(response);
 }
+
+export interface PlayerStyleStats {
+  playerName: string;
+  sessions?: number;
+  handsDealt: number;
+  vpip: number;          // 0..1
+  pfr: number;           // 0..1
+  af: number | null;     // postflop aggression factor; null if undefined (no calls)
+  postflopBets: number;
+  postflopRaises: number;
+  postflopCalls: number;
+}
+export async function fetchSessionPlayerStats(sessionId: string): Promise<PlayerStyleStats[]> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/player-stats`);
+  return handleResponse<PlayerStyleStats[]>(response);
+}
+export async function fetchPlayerStats(): Promise<PlayerStyleStats[]> {
+  const response = await fetch(`${API_BASE_URL}/player-stats`);
+  return handleResponse<PlayerStyleStats[]>(response);
+}
