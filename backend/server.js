@@ -868,26 +868,35 @@ app.get('/api/alias-mappings', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     db.all('SELECT name FROM removed_canonicals', [], (err2, removedRows) => {
       if (err2) return res.status(500).json({ error: err2.message });
+      db.all('SELECT DISTINCT name FROM players WHERE name IS NOT NULL AND name != ""', [], (err3, sessionPlayerRows) => {
+        if (err3) return res.status(500).json({ error: err3.message });
 
-      // Names currently used as the target of any mapping — these always stay
-      // visible (someone explicitly aliased to them).
-      const activeRealNames = new Set();
-      for (const r of rows) {
-        if (r.realName && r.realName.trim()) activeRealNames.add(r.realName.trim());
-      }
-      const removed = new Set(removedRows.map((r) => r.name));
+        // Names currently used as the target of any mapping — always visible.
+        const activeRealNames = new Set();
+        for (const r of rows) {
+          if (r.realName && r.realName.trim()) activeRealNames.add(r.realName.trim());
+        }
+        const removed = new Set(removedRows.map((r) => r.name));
 
-      // Start from seed canonicals, filter out merged-away names, then add
-      // anything currently in use as an alias target.
-      const canonical = new Set();
-      for (const c of (aliasSeed.canonical_players || [])) {
-        if (!removed.has(c)) canonical.add(c);
-      }
-      for (const n of activeRealNames) canonical.add(n);
+        const canonical = new Set();
+        // Seed canonicals (minus merged-away)
+        for (const c of (aliasSeed.canonical_players || [])) {
+          if (!removed.has(c)) canonical.add(c);
+        }
+        // Any name that's the target of an alias (always)
+        for (const n of activeRealNames) canonical.add(n);
+        // Any name that appears as a session player (minus merged-away).
+        // Without this the /aliases page would hide hand-typed names from
+        // in-person sessions that were never aliased, so the user couldn't
+        // merge them.
+        for (const r of sessionPlayerRows) {
+          if (!removed.has(r.name)) canonical.add(r.name);
+        }
 
-      res.json({
-        aliases: rows.map((r) => ({ alias: r.alias, realName: r.realName || null })),
-        canonicalPlayers: [...canonical].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+        res.json({
+          aliases: rows.map((r) => ({ alias: r.alias, realName: r.realName || null })),
+          canonicalPlayers: [...canonical].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })),
+        });
       });
     });
   });
