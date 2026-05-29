@@ -340,6 +340,74 @@ function CardView({
   );
 }
 
+// Rage-bait pools. Add freely — one is picked at random per hand.
+const RAGE_BAIT: Record<'win' | 'lose' | 'chop' | 'goodFold' | 'regretFold' | 'foldChop', string[]> = {
+  win: [
+    'Wow, you are so lucky 🍀',
+    'Pure luck box energy',
+    'Standard cooler. No skill involved.',
+    'Hero call by an actual donk',
+    'The poker gods owe you nothing and yet…',
+    "That's variance, not skill. Don't get cocky.",
+    "Nice spew that somehow worked out",
+    'Running absolutely scorching 🔥',
+    'Even a broken clock is right twice a day',
+    'GG, you Phil Ivey reincarnate (you are not)',
+  ],
+  lose: [
+    'Why would you call that…',
+    'Maybe should not have called.',
+    "Bro that was a snap fold spot",
+    "You actually thought that was good?",
+    "Donate much?",
+    'Calling station detected 🚨',
+    'Fish identified, please cash out',
+    'That was a level-1 fold and you still missed it',
+    "Even ChatGPT would've folded that",
+    'Imagine paying off with that 💀',
+  ],
+  chop: [
+    'Anti-climactic. Like your love life.',
+    'Action killer 🥱',
+    "At least you didn't lose. That's the bar now.",
+    "Couldn't even win a chop. Yikes.",
+  ],
+  goodFold: [
+    'Big brain energy 🧠',
+    'Tight is right',
+    'Disciplined like a monk',
+    'You finally folded something correctly. Bravo.',
+    'Saved a buy-in. You are still down overall though.',
+  ],
+  regretFold: [
+    'Imagine folding the winner… 😬',
+    'Nit alert 🚨',
+    'Scared money never wins',
+    'You had the goods and chickened out',
+    'Pussy fold. Sorry.',
+    'Your wife would have called there',
+    "That's a snap call. What are you doing.",
+  ],
+  foldChop: [
+    'You folded a CHOP. Somehow.',
+    'Saved the buy-in on a hand that goes nowhere. Wow.',
+  ],
+};
+
+function pickRage(folded: boolean, outcome: Outcome): string {
+  let pool: string[];
+  if (folded) {
+    if (outcome === 'win') pool = RAGE_BAIT.regretFold;
+    else if (outcome === 'lose') pool = RAGE_BAIT.goodFold;
+    else pool = RAGE_BAIT.foldChop;
+  } else {
+    if (outcome === 'win') pool = RAGE_BAIT.win;
+    else if (outcome === 'lose') pool = RAGE_BAIT.lose;
+    else pool = RAGE_BAIT.chop;
+  }
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 function ResultBanner({
   outcome, folded, onNext,
 }: {
@@ -354,7 +422,7 @@ function ResultBanner({
   if (folded) {
     if (outcome.outcome === 'win') {
       headline = '😬 You would have WON';
-      sub = `Your ${outcome.userHandName} beat opponent's ${outcome.oppHandName}. Regret level: high.`;
+      sub = `Your ${outcome.userHandName} beat opponent's ${outcome.oppHandName}.`;
       color = 'text-red-300';
     } else if (outcome.outcome === 'lose') {
       headline = '👍 Good fold';
@@ -381,13 +449,17 @@ function ResultBanner({
     }
   }
 
+  // Pick rage-bait once per outcome render so it doesn't reroll on every redraw.
+  const rage = useMemo(() => pickRage(folded, outcome.outcome), [folded, outcome]);
+
   return (
     <div className="flex flex-col items-center gap-2 animate-fade-in">
       <div className={`text-lg sm:text-xl font-bold ${color}`}>{headline}</div>
       <div className="text-xs sm:text-sm text-white/70 text-center">{sub}</div>
+      <div className="text-sm sm:text-base text-yellow-200 italic mt-1 text-center">— {rage}</div>
       <button
         onClick={onNext}
-        className="mt-1 px-5 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-slate-900 font-bold text-sm shadow"
+        className="mt-2 px-5 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-300 text-slate-900 font-bold text-sm shadow"
       >
         Deal next hand →
       </button>
