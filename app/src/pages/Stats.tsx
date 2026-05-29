@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { getTotalBuyIn, getProfitLoss, formatCurrency, formatDate } from '../utils/calculations';
 import { LuckLeaderboard } from '../components/LuckLeaderboard';
 import { PlayerStyleChartCard } from '../components/PlayerStyleChartCard';
+import { fetchPlayerStats, type PlayerStyleStats } from '../api';
 
 interface PlayerStats {
   name: string;
@@ -470,55 +471,186 @@ function PlayerDetailModal({
   player: PlayerStats;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<'overview' | 'advanced'>('overview');
+  const [styleStats, setStyleStats] = useState<PlayerStyleStats | null | 'missing'>(null);
+
+  // Fetch advanced stats once on mount; case-insensitive match against the
+  // canonical name. "missing" = endpoint succeeded but no row for this player
+  // (no logs uploaded yet that involve them).
+  useEffect(() => {
+    let active = true;
+    fetchPlayerStats()
+      .then((rows) => {
+        if (!active) return;
+        const match = rows.find((r) => r.playerName.toLowerCase() === player.name.toLowerCase());
+        setStyleStats(match ?? 'missing');
+      })
+      .catch(() => { if (active) setStyleStats('missing'); });
+    return () => { active = false; };
+  }, [player.name]);
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-bg-primary rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-bg-primary rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <h2 className="text-2xl font-bold text-text-primary">{player.name}</h2>
             <button onClick={onClose} className="p-2 hover:bg-bg-tertiary rounded-full">
               ✕
             </button>
           </div>
 
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div className="card">
-              <p
-                className={`text-2xl font-bold ${
-                  player.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'
-                }`}
-              >
-                {player.profitLoss >= 0 ? '+' : ''}
-                {formatCurrency(player.profitLoss)}
-              </p>
-              <p className="text-sm text-text-secondary">Total P&L</p>
-            </div>
-            <div className="card">
-              <p className="text-2xl font-bold text-text-primary">{player.sessionsPlayed}</p>
-              <p className="text-sm text-text-secondary">Sessions</p>
-            </div>
-            <div className="card">
-              <p className="text-xl font-bold text-green-600">+{formatCurrency(player.biggestWin)}</p>
-              <p className="text-sm text-text-secondary">Biggest Win</p>
-            </div>
-            <div className="card">
-              <p className="text-xl font-bold text-red-600">{formatCurrency(player.biggestLoss)}</p>
-              <p className="text-sm text-text-secondary">Biggest Loss</p>
-            </div>
+          {/* Tabs */}
+          <div className="flex gap-1 border-b border-bg-tertiary mb-5">
+            <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
+            <TabButton active={tab === 'advanced'} onClick={() => setTab('advanced')}>Advanced stats</TabButton>
           </div>
 
-          {/* Lifetime P&L Chart */}
-          <div className="mb-4">
-            <h3 className="text-lg font-semibold text-text-primary mb-4">Lifetime P&L</h3>
-            <LifetimePnLChart sessionHistory={player.sessionHistory} />
-          </div>
+          {tab === 'overview' && (
+            <>
+              {/* Stats Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+                <SummaryCard
+                  value={`${player.profitLoss >= 0 ? '+' : ''}${formatCurrency(player.profitLoss)}`}
+                  label="Total P&L"
+                  color={player.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'}
+                  big
+                />
+                <SummaryCard value={String(player.sessionsPlayed)} label="Sessions" big />
+                <SummaryCard
+                  value={`+${formatCurrency(player.biggestWin)}`}
+                  label="Biggest Win"
+                  color="text-green-600"
+                />
+                <SummaryCard
+                  value={formatCurrency(player.biggestLoss)}
+                  label="Biggest Loss"
+                  color="text-red-600"
+                />
+              </div>
 
-          <button onClick={onClose} className="btn-primary w-full">
+              {/* Lifetime P&L Chart */}
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-text-primary mb-3">Lifetime P&L</h3>
+                <LifetimePnLChart sessionHistory={player.sessionHistory} />
+              </div>
+            </>
+          )}
+
+          {tab === 'advanced' && (
+            <AdvancedStatsPanel data={styleStats} playerName={player.name} />
+          )}
+
+          <button onClick={onClose} className="btn-primary w-full mt-4">
             Close
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+        active ? 'border-yellow-400 text-text-primary' : 'border-transparent text-text-secondary hover:text-text-primary'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SummaryCard({ value, label, color = 'text-text-primary', big = false }: {
+  value: string; label: string; color?: string; big?: boolean;
+}) {
+  return (
+    <div className="card">
+      <p className={`${big ? 'text-2xl' : 'text-xl'} font-bold ${color}`}>{value}</p>
+      <p className="text-sm text-text-secondary mt-1">{label}</p>
+    </div>
+  );
+}
+
+function AdvancedStatsPanel({ data, playerName }: { data: PlayerStyleStats | null | 'missing'; playerName: string }) {
+  if (data === null) {
+    return <div className="card text-center text-text-secondary text-sm py-8">Loading…</div>;
+  }
+  if (data === 'missing') {
+    return (
+      <div className="card text-center text-text-secondary text-sm py-8">
+        No PokerNow hand logs uploaded yet that include <span className="font-semibold">{playerName}</span>.
+        <br />Upload a log on any session they played in to see VPIP / PFR / AF here.
+      </div>
+    );
+  }
+
+  const pct = (n: number) => (n * 100).toFixed(1) + '%';
+  const af = data.af == null ? '∞' : data.af.toFixed(2);
+  const vpipPfrRatio = data.vpip > 0 ? ((data.pfr / data.vpip) * 100).toFixed(0) + '%' : '—';
+  const style = styleLabel(data.vpip, data.pfr, data.af);
+
+  return (
+    <>
+      <div className="card mb-4 text-center">
+        <p className="text-lg font-semibold text-text-primary">{style}</p>
+        <p className="text-xs text-text-secondary mt-1">
+          Based on {data.handsDealt.toLocaleString()} hands across {data.sessions ?? 0} logged session{(data.sessions ?? 0) === 1 ? '' : 's'}.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <StatCard value={pct(data.vpip)} label="VPIP" help="Voluntarily Put $ In Pot" />
+        <StatCard value={pct(data.pfr)} label="PFR" help="Pre-Flop Raise %" />
+        <StatCard value={vpipPfrRatio} label="PFR / VPIP" help="Higher ratio = more aggressive style" />
+        <StatCard value={af} label="AF" help="Postflop (bets + raises) / calls" />
+      </div>
+
+      <div className="card">
+        <h4 className="text-sm font-semibold text-text-primary mb-2">Postflop breakdown</h4>
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <PostflopCell label="Bets" value={data.postflopBets} />
+          <PostflopCell label="Raises" value={data.postflopRaises} />
+          <PostflopCell label="Calls" value={data.postflopCalls} />
+        </div>
+      </div>
+
+      <p className="text-xs text-text-tertiary text-center mt-3">
+        Stats only count hands from sessions where a PokerNow hand log was uploaded.
+        Group-relative quadrant chart is on the main /stats page.
+      </p>
+    </>
+  );
+}
+
+function StatCard({ value, label, help }: { value: string; label: string; help: string }) {
+  return (
+    <div className="card text-center" title={help}>
+      <p className="text-2xl font-bold text-text-primary tabular-nums">{value}</p>
+      <p className="text-xs font-semibold text-text-secondary mt-1">{label}</p>
+      <p className="text-xs text-text-tertiary mt-0.5">{help}</p>
+    </div>
+  );
+}
+
+function PostflopCell({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="text-center bg-bg-secondary rounded p-2">
+      <p className="text-lg font-semibold text-text-primary tabular-nums">{value}</p>
+      <p className="text-xs text-text-secondary">{label}</p>
+    </div>
+  );
+}
+
+function styleLabel(vpip: number, pfr: number, af: number | null): string {
+  // Absolute thresholds for the label here (it's a player-by-player view, not
+  // group-relative). Looser conventions than online cash to suit home games.
+  const loose = vpip >= 0.35;
+  const passive = (af == null ? 0 : af) < 1 || pfr < 0.12;
+  if (loose && !passive) return '🔥 Loose Aggressive (LAG)';
+  if (loose && passive) return '🤠 Loose Passive (Calling Station)';
+  if (!loose && !passive) return '🎯 Tight Aggressive (TAG)';
+  return '🪨 Tight Passive (Rock)';
 }
