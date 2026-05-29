@@ -189,10 +189,10 @@ export function SessionDetail() {
             </div>
             <button
               onClick={() => navigate(`/session/${session.id}/ev`)}
-              className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
-              title="Who's a luck box? (all-in EV chart)"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full hover:bg-bg-tertiary transition-colors text-sm text-text-primary"
+              title="All-in EV chart"
             >
-              🎰
+              🎰 <span className="hidden sm:inline">Luck box</span>
             </button>
             <span
               className={`badge ${
