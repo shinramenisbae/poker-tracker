@@ -22,7 +22,7 @@ export function PlayerStyleChartCard() {
       data={data}
       minHands={100}
       title="🎯 Player styles"
-      subtitle="VPIP vs PFR across every session with a hand log. Bigger dot = more hands. Hover for full stats."
+      subtitle="VPIP vs PFR across every session with a hand log. Dividers sit at your group's median, so the centre is the average style for your group. Faded dot = small sample."
     />
   );
 }

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import {
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer, Cell,
+  ScatterChart, Scatter, XAxis, YAxis, Tooltip,
+  ReferenceLine, ResponsiveContainer,
 } from 'recharts';
 import type { PlayerStyleStats } from '../api';
 
@@ -75,29 +75,39 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
       </div>
 
       <ResponsiveContainer width="100%" height={460}>
-        <ScatterChart margin={{ top: 16, right: 40, bottom: 32, left: 16 }}>
-          <CartesianGrid stroke="#333" strokeDasharray="3 3" />
+        <ScatterChart margin={{ top: 16, right: 60, bottom: 32, left: 16 }}>
+          {/* No CartesianGrid — keeps the chart clean. The only lines are the
+              two solid quadrant dividers at the group medians. */}
           <XAxis
             type="number" dataKey="vpip" name="VPIP"
             domain={xDomain}
-            stroke="#999" tick={{ fill: '#999', fontSize: 11 }}
-            tickFormatter={(v) => `${v}%`}
+            ticks={[xDomain[0], vpipMid, xDomain[1]]}
+            stroke="#666" tick={{ fill: '#999', fontSize: 11 }}
+            tickFormatter={(v) => `${Math.round(v)}%`}
             label={{ value: 'VPIP →  (looser)', position: 'insideBottom', offset: -10, fill: '#999', fontSize: 11 }}
           />
           <YAxis
             type="number" dataKey="pfr" name="PFR"
             domain={yDomain}
-            stroke="#999" tick={{ fill: '#999', fontSize: 11 }}
-            tickFormatter={(v) => `${v}%`}
+            ticks={[yDomain[0], pfrMid, yDomain[1]]}
+            stroke="#666" tick={{ fill: '#999', fontSize: 11 }}
+            tickFormatter={(v) => `${Math.round(v)}%`}
             label={{ value: 'PFR ↑  (more aggressive)', angle: -90, position: 'insideLeft', fill: '#999', fontSize: 11 }}
           />
 
-          {/* Quadrant dividers — at the GROUP median, not absolute thresholds. */}
-          <ReferenceLine x={vpipMid} stroke="#666" strokeDasharray="4 4" label={{ value: `group median ${vpipMid.toFixed(0)}%`, position: 'top', fill: '#888', fontSize: 10 }} />
-          <ReferenceLine y={pfrMid} stroke="#666" strokeDasharray="4 4" label={{ value: `${pfrMid.toFixed(0)}%`, position: 'right', fill: '#888', fontSize: 10 }} />
+          {/* Quadrant dividers — solid, brighter than the axes so they read as
+              the meaningful lines on the chart. */}
+          <ReferenceLine
+            x={vpipMid} stroke="#facc15" strokeWidth={1.5} strokeOpacity={0.55}
+            label={{ value: `median ${vpipMid.toFixed(0)}%`, position: 'top', fill: '#facc15', fontSize: 10 }}
+          />
+          <ReferenceLine
+            y={pfrMid} stroke="#facc15" strokeWidth={1.5} strokeOpacity={0.55}
+            label={{ value: `median ${pfrMid.toFixed(0)}%`, position: 'insideRight', fill: '#facc15', fontSize: 10 }}
+          />
 
           <Tooltip
-            cursor={{ strokeDasharray: '3 3' }}
+            cursor={false}
             content={({ payload }) => {
               if (!payload || payload.length === 0) return null;
               const p: any = payload[0].payload;
@@ -120,7 +130,6 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
 
           <Scatter
             data={points}
-            fill="#facc15"
             shape={(props: any) => {
               const { cx, cy, payload } = props;
               if (cx == null || cy == null) return null;
@@ -138,17 +147,14 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
                     fill={faded ? '#aaa' : '#fff'}
                     fontSize={11}
                     fontWeight={faded ? 400 : 600}
+                    style={{ pointerEvents: 'none' }}
                   >
                     {payload.name}
                   </text>
                 </g>
               );
             }}
-          >
-            {points.map((p, i) => (
-              <Cell key={i} fill={p.faded ? '#facc1566' : '#facc15'} />
-            ))}
-          </Scatter>
+          />
         </ScatterChart>
       </ResponsiveContainer>
 
