@@ -1,25 +1,27 @@
 import { useMemo } from 'react';
 import {
-  ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip,
-  ReferenceLine, ResponsiveContainer, Cell, LabelList,
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, ResponsiveContainer, Cell,
 } from 'recharts';
 import type { PlayerStyleStats } from '../api';
 
 interface Props {
   data: PlayerStyleStats[];
-  minHands?: number; // marker fades below this; default 50 for per-session, 100 for aggregate
+  minHands?: number; // qualifying threshold for the group medians + axis range
   title?: string;
   subtitle?: string;
 }
 
-// VPIP/PFR thresholds for quadrant lines. Tuned for low-stakes home games (looser
-// than online cash). Tweak via the props if you want.
-const VPIP_CUTOFF = 25;
-const PFR_CUTOFF = 15;
+function median(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[m - 1] + sorted[m]) / 2 : sorted[m];
+}
 
 export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props) {
-  const points = useMemo(
-    () => data.map((d) => ({
+  const { points, vpipMid, pfrMid, xDomain, yDomain } = useMemo(() => {
+    const points = data.map((d) => ({
       name: d.playerName,
       vpip: +(d.vpip * 100).toFixed(1),
       pfr: +(d.pfr * 100).toFixed(1),
@@ -27,9 +29,32 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
       af: d.af == null ? null : +d.af.toFixed(2),
       sessions: d.sessions,
       faded: d.handsDealt < minHands,
-    })),
-    [data, minHands]
-  );
+    }));
+
+    // Medians use only the qualifying (full-opacity) players so a single
+    // low-sample outlier (e.g. a guest who played 12 hands at 100% VPIP)
+    // doesn't drag the centre line.
+    const qualifying = points.filter((p) => !p.faded);
+    const vpipMid = median(qualifying.map((p) => p.vpip)) || median(points.map((p) => p.vpip));
+    const pfrMid = median(qualifying.map((p) => p.pfr)) || median(points.map((p) => p.pfr));
+
+    // Fit the axes to the group's actual range, with 8-percentage-point padding
+    // on every side. Falls back to a sane window when there's only one point.
+    const xs = points.map((p) => p.vpip);
+    const ys = points.map((p) => p.pfr);
+    const xMin = Math.max(0, Math.floor(Math.min(...xs) - 8));
+    const xMax = Math.min(100, Math.ceil(Math.max(...xs) + 8));
+    const yMin = Math.max(0, Math.floor(Math.min(...ys) - 6));
+    const yMax = Math.min(100, Math.ceil(Math.max(...ys) + 6));
+
+    return {
+      points,
+      vpipMid,
+      pfrMid,
+      xDomain: [xMin, xMax] as [number, number],
+      yDomain: [yMin, yMax] as [number, number],
+    };
+  }, [data, minHands]);
 
   if (data.length === 0) {
     return (
@@ -45,39 +70,38 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
       {subtitle && <p className="text-xs text-text-secondary mb-3">{subtitle}</p>}
 
       <div className="grid grid-cols-2 gap-1 text-xs text-text-secondary mb-2 px-12">
-        <div className="text-left">🪨 Tight passive</div>
-        <div className="text-right">🤠 Loose passive</div>
+        <div className="text-left">🎯 Tighter & more aggressive (TAG)</div>
+        <div className="text-right">🔥 Looser & more aggressive (LAG)</div>
       </div>
 
-      <ResponsiveContainer width="100%" height={420}>
-        <ScatterChart margin={{ top: 8, right: 24, bottom: 24, left: 8 }}>
+      <ResponsiveContainer width="100%" height={460}>
+        <ScatterChart margin={{ top: 16, right: 40, bottom: 32, left: 16 }}>
           <CartesianGrid stroke="#333" strokeDasharray="3 3" />
           <XAxis
             type="number" dataKey="vpip" name="VPIP"
-            domain={[0, 100]} ticks={[0, 25, 50, 75, 100]}
+            domain={xDomain}
             stroke="#999" tick={{ fill: '#999', fontSize: 11 }}
             tickFormatter={(v) => `${v}%`}
             label={{ value: 'VPIP →  (looser)', position: 'insideBottom', offset: -10, fill: '#999', fontSize: 11 }}
           />
           <YAxis
             type="number" dataKey="pfr" name="PFR"
-            domain={[0, 60]} ticks={[0, 15, 30, 45, 60]}
+            domain={yDomain}
             stroke="#999" tick={{ fill: '#999', fontSize: 11 }}
             tickFormatter={(v) => `${v}%`}
             label={{ value: 'PFR ↑  (more aggressive)', angle: -90, position: 'insideLeft', fill: '#999', fontSize: 11 }}
           />
-          <ZAxis type="number" dataKey="hands" range={[60, 600]} name="hands" />
 
-          {/* Quadrant divider lines */}
-          <ReferenceLine x={VPIP_CUTOFF} stroke="#666" strokeDasharray="4 4" />
-          <ReferenceLine y={PFR_CUTOFF} stroke="#666" strokeDasharray="4 4" />
+          {/* Quadrant dividers — at the GROUP median, not absolute thresholds. */}
+          <ReferenceLine x={vpipMid} stroke="#666" strokeDasharray="4 4" label={{ value: `group median ${vpipMid.toFixed(0)}%`, position: 'top', fill: '#888', fontSize: 10 }} />
+          <ReferenceLine y={pfrMid} stroke="#666" strokeDasharray="4 4" label={{ value: `${pfrMid.toFixed(0)}%`, position: 'right', fill: '#888', fontSize: 10 }} />
 
           <Tooltip
             cursor={{ strokeDasharray: '3 3' }}
             content={({ payload }) => {
               if (!payload || payload.length === 0) return null;
               const p: any = payload[0].payload;
-              const style = styleLabel(p.vpip, p.pfr);
+              const style = styleLabel(p.vpip, p.pfr, vpipMid, pfrMid);
               return (
                 <div className="bg-bg-primary border border-bg-tertiary rounded p-2 text-xs">
                   <div className="font-semibold text-text-primary">{p.name}</div>
@@ -94,43 +118,57 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
             }}
           />
 
-          <Scatter data={points} fill="#facc15">
-            {points.map((p, i) => (
-              <Cell key={i} fill={p.faded ? '#facc1566' : '#facc15'} stroke={p.faded ? '#facc1599' : '#facc15'} />
-            ))}
-            <LabelList
-              dataKey="name"
-              position="top"
-              content={({ x, y, value, index }: any) => {
-                const p = points[index];
-                if (!p) return null;
-                return (
-                  <text x={x} y={y - 6} fill={p.faded ? '#aaa' : '#fff'} textAnchor="middle" fontSize={11}>
-                    {value}
+          <Scatter
+            data={points}
+            fill="#facc15"
+            shape={(props: any) => {
+              const { cx, cy, payload } = props;
+              if (cx == null || cy == null) return null;
+              const faded = payload.faded;
+              return (
+                <g>
+                  <circle
+                    cx={cx} cy={cy} r={7}
+                    fill={faded ? '#facc1566' : '#facc15'}
+                    stroke={faded ? '#facc1599' : '#facc15'}
+                    strokeWidth={1.5}
+                  />
+                  <text
+                    x={cx + 10} y={cy + 4}
+                    fill={faded ? '#aaa' : '#fff'}
+                    fontSize={11}
+                    fontWeight={faded ? 400 : 600}
+                  >
+                    {payload.name}
                   </text>
-                );
-              }}
-            />
+                </g>
+              );
+            }}
+          >
+            {points.map((p, i) => (
+              <Cell key={i} fill={p.faded ? '#facc1566' : '#facc15'} />
+            ))}
           </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
 
       <div className="grid grid-cols-2 gap-1 text-xs text-text-secondary mt-1 px-12">
-        <div className="text-left">🎯 Tight aggressive (TAG)</div>
-        <div className="text-right">🔥 Loose aggressive (LAG)</div>
+        <div className="text-left">🪨 Tighter & more passive</div>
+        <div className="text-right">🤠 Looser & more passive (calling station)</div>
       </div>
       <p className="text-xs text-text-tertiary text-center mt-3">
-        Quadrants split at VPIP {VPIP_CUTOFF}% / PFR {PFR_CUTOFF}%. Marker size = hands dealt; faded markers = small sample (&lt;{minHands} hands).
+        Quadrants split at the group's median VPIP / PFR — so a player at the centre plays an average style for this group.
+        Faded markers = small sample (&lt;{minHands} hands). All dots are the same size; hover for hand count.
       </p>
     </div>
   );
 }
 
-function styleLabel(vpip: number, pfr: number): string {
-  const loose = vpip >= VPIP_CUTOFF;
-  const aggressive = pfr >= PFR_CUTOFF;
-  if (loose && aggressive) return '🔥 Loose aggressive';
-  if (loose && !aggressive) return '🤠 Loose passive (calling station)';
-  if (!loose && aggressive) return '🎯 Tight aggressive';
-  return '🪨 Tight passive (rock)';
+function styleLabel(vpip: number, pfr: number, vpipMid: number, pfrMid: number): string {
+  const loose = vpip >= vpipMid;
+  const aggressive = pfr >= pfrMid;
+  if (loose && aggressive) return '🔥 Looser + more aggressive than group';
+  if (loose && !aggressive) return '🤠 Looser + more passive than group';
+  if (!loose && aggressive) return '🎯 Tighter + more aggressive than group';
+  return '🪨 Tighter + more passive than group';
 }
