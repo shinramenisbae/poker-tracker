@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from 'react';
 // @ts-expect-error — pokersolver has no types
 import { Hand } from 'pokersolver';
+import { fetchAliasMappings } from '../api';
 
 type Phase =
   | 'dealing'      // brief intro stagger
@@ -79,6 +80,29 @@ export function PokerEasterEgg({ onClose }: { onClose: () => void }) {
   const [phase, setPhase] = useState<Phase>('dealing');
   const [outcome, setOutcome] = useState<ReturnType<typeof evaluate> | null>(null);
   const [stats, setStats] = useState({ hands: 0, net: 0, calls: 0, folds: 0, goodFolds: 0, regretFolds: 0 });
+
+  // Pool of real player names from the tracker — used as random opponents.
+  // Falls back to a small hardcoded list if the fetch fails so the game still works.
+  const [playerPool, setPlayerPool] = useState<string[]>(['Patt', 'Stephen', 'Han', 'Jeremy', 'Nick']);
+  useEffect(() => {
+    let active = true;
+    fetchAliasMappings()
+      .then((d) => {
+        if (!active) return;
+        const named = d.canonicalPlayers.filter((p) => p.length >= 2 && /^[A-Za-z]/.test(p));
+        if (named.length > 0) setPlayerPool(named);
+      })
+      .catch(() => { /* keep fallback */ });
+    return () => { active = false; };
+  }, []);
+
+  // Random opponent name per hand. Stable per hand object so it doesn't
+  // re-roll on every render.
+  const opponentName = useMemo(
+    () => playerPool[Math.floor(Math.random() * playerPool.length)] ?? 'Opponent',
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hand, playerPool]
+  );
 
   // On hand start: brief delay for "dealing", then go to preflop decision.
   useEffect(() => {
@@ -163,11 +187,11 @@ export function PokerEasterEgg({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {/* Opponent */}
+        {/* Opponent — cards stay face-down until user decides */}
         <PlayerRow
-          label="Opponent (always shoves)"
+          label={`${opponentName} (shoves)`}
           cards={hand.opp}
-          reveal={true}
+          reveal={phase !== 'dealing' && phase !== 'preflop'}
           highlight={(phase === 'showdown' || phase === 'folded') && outcome?.outcome === 'lose'}
         />
 
@@ -278,28 +302,39 @@ function CardView({
   const display = card.rank === 'T' ? '10' : card.rank;
   return (
     <div
-      className={`w-12 h-16 sm:w-14 sm:h-20 rounded-md shadow-md select-none transition-all duration-300 ${
+      className={`relative w-14 h-20 sm:w-16 sm:h-24 rounded-md shadow-md select-none transition-all duration-300 overflow-hidden ${
         faceUp ? 'bg-white' : 'bg-gradient-to-br from-blue-600 to-blue-900'
       } ${highlight ? 'ring-2 ring-yellow-400 shadow-yellow-400/40 scale-105' : ''}`}
       style={{
         animation: faceUp ? `cardFlip 320ms ease-out ${dealIdx * 80}ms both` : undefined,
-        transformStyle: 'preserve-3d',
       }}
     >
       {faceUp && (
-        <div className={`relative w-full h-full flex flex-col justify-between p-1 ${SUIT_COLOR[card.suit]}`}>
-          <div className="text-left leading-none">
-            <div className="text-base sm:text-lg font-bold">{display}</div>
-            <div className="text-base sm:text-lg leading-none -mt-0.5">{SUIT_SYMBOL[card.suit]}</div>
+        <>
+          {/* Top-left rank + suit */}
+          <div className={`absolute top-0.5 left-1 leading-none ${SUIT_COLOR[card.suit]}`}>
+            <div className="text-sm sm:text-base font-bold">{display}</div>
+            <div className="text-xs sm:text-sm leading-none">{SUIT_SYMBOL[card.suit]}</div>
           </div>
-          <div className="text-right leading-none rotate-180">
-            <div className="text-base sm:text-lg font-bold">{display}</div>
-            <div className="text-base sm:text-lg leading-none -mt-0.5">{SUIT_SYMBOL[card.suit]}</div>
+          {/* Bottom-right rank + suit, rotated 180. Use absolute positioning
+              so the rotation doesn't push it out of the card. */}
+          <div
+            className={`absolute bottom-0.5 right-1 leading-none ${SUIT_COLOR[card.suit]}`}
+            style={{ transform: 'rotate(180deg)', transformOrigin: 'center' }}
+          >
+            <div className="text-sm sm:text-base font-bold">{display}</div>
+            <div className="text-xs sm:text-sm leading-none">{SUIT_SYMBOL[card.suit]}</div>
           </div>
-        </div>
+          {/* Big centred suit for visual heft */}
+          <div className={`absolute inset-0 flex items-center justify-center ${SUIT_COLOR[card.suit]} opacity-30`}>
+            <span className="text-2xl sm:text-3xl">{SUIT_SYMBOL[card.suit]}</span>
+          </div>
+        </>
       )}
       {!faceUp && (
-        <div className="w-full h-full rounded-md border-2 border-blue-800/60" />
+        <div className="w-full h-full rounded-md border-2 border-blue-800/60 flex items-center justify-center text-blue-200/40 text-xl">
+          ♠
+        </div>
       )}
     </div>
   );
