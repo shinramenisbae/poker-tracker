@@ -135,7 +135,7 @@ export function SessionEv() {
                   <YAxis stroke="#999" tick={{ fill: '#999', fontSize: 12 }} tickFormatter={(v) => `$${v}`} />
                   <Tooltip
                     contentStyle={{ background: '#1a1a1a', border: '1px solid #444', borderRadius: 4, color: '#eee' }}
-                    formatter={(value: number) => `$${value.toFixed(2)}`}
+                    formatter={(value) => `$${Number(value ?? 0).toFixed(2)}`}
                     labelFormatter={(label) => `Hand ${label}`}
                   />
                   <Legend wrapperStyle={{ color: '#ccc' }} />
