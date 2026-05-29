@@ -462,7 +462,21 @@ function formatResultsMessage(session, results) {
 
   if (winners.length > 0) {
     msg += '🏆 **Winners**\n';
-    for (const w of winners) msg += `• ${w.name}: **${formatMoney(w.profit)}**\n`;
+    for (const w of winners) {
+      const isBank = w === bankPlayer;
+      msg += `• ${w.name}: **${formatMoney(w.profit)}**`;
+      if (isBank) {
+        msg += `  🏦 _(bank player — collects from losers)_\n`;
+      } else {
+        // Show bank info inline so the bank player can transfer winnings.
+        const info = bankAccounts[w.name];
+        if (info) {
+          msg += ` → ${info.displayName} \`${info.account}\`\n`;
+        } else {
+          msg += ` → _(no account on file)_\n`;
+        }
+      }
+    }
     msg += '\n';
   }
 
