@@ -15,7 +15,6 @@
 //   - "Imported from Discord (threadId=X)"        → online session already imported
 //   - "Announced on Discord (threadId=X)"         → session already announced
 import 'dotenv/config';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +23,7 @@ import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration } fro
 import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
+import { accountsMapFromResponse } from './bank.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,10 +40,6 @@ const {
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
 }
-
-const bankAccounts = JSON.parse(await fs.readFile(path.join(__dirname, 'bank-accounts.json'), 'utf8'));
-delete bankAccounts._comment;
-console.log(`Loaded ${Object.keys(bankAccounts).length} bank accounts.`);
 
 const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
@@ -585,7 +581,7 @@ function formatMoney(n) {
   return `${sign}$${Math.abs(n).toFixed(2)}`;
 }
 
-function formatResultsMessage(session, results) {
+function formatResultsMessage(session, results, bankAccounts) {
   const winners = results.filter((r) => r.profit > 0.005);
   const losers = results.filter((r) => r.profit < -0.005);
   const evens = results.filter((r) => Math.abs(r.profit) <= 0.005);
@@ -639,9 +635,22 @@ function formatResultsMessage(session, results) {
   return msg;
 }
 
+// Bank accounts live in the tracker DB. Fetch on demand so edits made in the
+// Manage Players UI take effect immediately. Returns {} on any failure, which
+// makes formatResultsMessage fall back to "no account on file".
+async function fetchBankAccounts() {
+  try {
+    return accountsMapFromResponse(await trackerGet('/bank-accounts'));
+  } catch (err) {
+    console.error('Failed to fetch bank accounts:', err.message);
+    return {};
+  }
+}
+
 async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
-  const text = formatResultsMessage(session, results);
+  const bankAccounts = await fetchBankAccounts();
+  const text = formatResultsMessage(session, results, bankAccounts);
   await thread.send(text);
 }
 
