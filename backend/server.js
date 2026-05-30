@@ -1228,6 +1228,13 @@ app.post('/api/players/merge', (req, res) => {
       if (err) return res.status(500).json({ error: err.message });
       counts.handEvs = this.changes;
 
+      // Move bank details to the merge target if it has none of its own.
+      db.run(
+        `UPDATE bank_accounts SET name = ? WHERE name = ? AND NOT EXISTS (SELECT 1 FROM bank_accounts WHERE name = ?)`,
+        [into, from, into]
+      );
+      db.run('DELETE FROM bank_accounts WHERE name = ?', [from]);
+
       // Record the merge so the seed list stops re-injecting the old name.
       // Also clear any prior removal of `into` (in case it was previously
       // merged away and is now being re-used as a target).
@@ -1277,7 +1284,7 @@ app.delete('/api/players/:name', (req, res) => {
   const name = (req.params.name || '').trim();
   if (!name) return res.status(400).json({ error: 'name required' });
   const now = new Date().toISOString();
-  const counts = { players: 0, aliasMappingsByRealName: 0, aliasMappingsByKey: 0, handEvs: 0 };
+  const counts = { players: 0, aliasMappingsByRealName: 0, aliasMappingsByKey: 0, handEvs: 0, bankAccounts: 0 };
 
   db.serialize(() => {
     db.run('DELETE FROM players WHERE name = ?', [name], function (err) {
@@ -1297,6 +1304,10 @@ app.delete('/api/players/:name', (req, res) => {
     db.run('DELETE FROM hand_evs WHERE playerName = ?', [name], function (err) {
       if (err) return res.status(500).json({ error: err.message });
       counts.handEvs = this.changes;
+    });
+    db.run('DELETE FROM bank_accounts WHERE name = ?', [name], function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      counts.bankAccounts = this.changes;
     });
     db.run(
       `INSERT INTO removed_canonicals (name, mergedInto, removedAt) VALUES (?, NULL, ?)
