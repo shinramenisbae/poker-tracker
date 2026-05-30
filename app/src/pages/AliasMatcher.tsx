@@ -7,7 +7,11 @@ import {
   deletePlayer,
   deleteAlias,
   deleteAllUnmappedAliases,
+  fetchBankAccounts,
+  setBankAccount,
+  deleteBankAccount,
   type AliasMapping,
+  type BankAccount,
 } from '../api';
 
 const UNMAPPED_BUCKET = '__UNMAPPED__';
@@ -27,6 +31,17 @@ export function AliasMatcher() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [bankAccounts, setBankAccounts] = useState<Record<string, BankAccount>>({});
+  const [bankTarget, setBankTarget] = useState<string | null>(null);
+
+  async function loadBankAccounts() {
+    try {
+      const data = await fetchBankAccounts();
+      setBankAccounts(data.accounts || {});
+    } catch {
+      // Bank details are secondary; don't block the page on a failure here.
+    }
+  }
 
   // Load data on mount and refresh every 15s so multiple friends see each other's progress.
   useEffect(() => {
@@ -45,6 +60,7 @@ export function AliasMatcher() {
       }
     }
     load();
+    loadBankAccounts();
     const interval = setInterval(load, 15000);
     return () => { active = false; clearInterval(interval); };
   }, []);
@@ -193,6 +209,18 @@ export function AliasMatcher() {
     } finally {
       setMerging(false);
     }
+  }
+
+  async function handleBankSave(name: string, info: BankAccount) {
+    await setBankAccount(name, info);
+    await loadBankAccounts();
+    setBankTarget(null);
+  }
+
+  async function handleBankRemove(name: string) {
+    await deleteBankAccount(name);
+    await loadBankAccounts();
+    setBankTarget(null);
   }
 
   if (loading) {
@@ -359,6 +387,15 @@ export function AliasMatcher() {
                     <div className="flex items-center gap-2">
                       <div className="text-xs text-text-secondary">{chips.length} mapped</div>
                       <button
+                        onClick={(e) => { e.stopPropagation(); setBankTarget(player); }}
+                        className={`text-xs px-1.5 py-0.5 rounded hover:bg-bg-tertiary ${
+                          bankAccounts[player] ? 'text-yellow-400' : 'text-text-secondary hover:text-yellow-400'
+                        }`}
+                        title={bankAccounts[player] ? `Edit bank details for "${player}"` : `Add bank details for "${player}"`}
+                      >
+                        💳 bank
+                      </button>
+                      <button
                         onClick={(e) => { e.stopPropagation(); setMergeSource(player); }}
                         className="text-xs text-text-secondary hover:text-yellow-400 px-1.5 py-0.5 rounded hover:bg-bg-tertiary"
                         title={`Merge "${player}" into another player`}
@@ -422,6 +459,16 @@ export function AliasMatcher() {
           deleting={deleting}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleDeleteConfirm}
+        />
+      )}
+
+      {bankTarget && (
+        <BankAccountModal
+          name={bankTarget}
+          initial={bankAccounts[bankTarget] ?? null}
+          onCancel={() => setBankTarget(null)}
+          onSave={handleBankSave}
+          onRemove={handleBankRemove}
         />
       )}
     </div>
@@ -556,6 +603,115 @@ function DeleteModal({
           >
             {deleting ? 'Deleting…' : `Delete ${target}`}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BankAccountModal({
+  name, initial, onCancel, onSave, onRemove,
+}: {
+  name: string;
+  initial: BankAccount | null;
+  onCancel: () => void;
+  onSave: (name: string, info: BankAccount) => Promise<void>;
+  onRemove: (name: string) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(initial?.displayName ?? '');
+  const [account, setAccount] = useState(initial?.account ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSave = displayName.trim() !== '' || account.trim() !== '';
+
+  async function handleSave() {
+    if (!canSave || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(name, { displayName: displayName.trim(), account: account.trim() });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onRemove(name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4" onClick={onCancel}>
+      <div className="bg-bg-secondary rounded-lg w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="p-4 border-b border-bg-tertiary">
+          <h2 className="font-semibold text-text-primary">
+            Bank details — <span className="text-yellow-400">{name}</span>
+          </h2>
+          <p className="text-xs text-text-secondary mt-1">
+            Shown in the bot's Discord settlement message when this player is owed money.
+          </p>
+        </div>
+        <div className="p-4 space-y-3">
+          <label className="block">
+            <span className="text-xs text-text-secondary">Account name</span>
+            <input
+              autoFocus
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="e.g. George Lin"
+              className="w-full mt-1 px-3 py-1.5 rounded bg-bg-primary border border-bg-tertiary text-text-primary text-sm focus:outline-none focus:border-yellow-400"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-text-secondary">Account number</span>
+            <input
+              type="text"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+              placeholder="e.g. 01-0170-0115185-00"
+              className="w-full mt-1 px-3 py-1.5 rounded bg-bg-primary border border-bg-tertiary text-text-primary text-sm focus:outline-none focus:border-yellow-400"
+            />
+          </label>
+          {error && <div className="text-red-300 text-xs">{error}</div>}
+        </div>
+        <div className="p-3 border-t border-bg-tertiary flex gap-2 justify-between">
+          <div>
+            {initial && (
+              <button
+                onClick={handleRemove}
+                disabled={busy}
+                className="px-3 py-1.5 rounded bg-red-500/80 text-white text-sm font-semibold hover:bg-red-600 disabled:opacity-50"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={onCancel}
+              disabled={busy}
+              className="px-3 py-1.5 rounded bg-bg-tertiary text-text-primary text-sm hover:bg-bg-primary disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={!canSave || busy}
+              className="px-3 py-1.5 rounded bg-yellow-400 text-bg-primary text-sm font-semibold disabled:opacity-40"
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
