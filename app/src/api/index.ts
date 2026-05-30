@@ -183,6 +183,35 @@ export async function setAliasMapping(alias: string, realName: string | null): P
   return handleResponse<AliasMapping>(response);
 }
 
+export interface BankAccount {
+  displayName: string;
+  account: string;
+}
+export interface BankAccountsResponse {
+  accounts: Record<string, BankAccount>;
+}
+
+export async function fetchBankAccounts(): Promise<BankAccountsResponse> {
+  const response = await fetch(`${API_BASE_URL}/bank-accounts`);
+  return handleResponse<BankAccountsResponse>(response);
+}
+
+export async function setBankAccount(name: string, info: BankAccount): Promise<BankAccount & { name: string }> {
+  const response = await fetch(`${API_BASE_URL}/bank-accounts/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(info),
+  });
+  return handleResponse<BankAccount & { name: string }>(response);
+}
+
+export async function deleteBankAccount(name: string): Promise<{ ok: true; name: string; deleted: number }> {
+  const response = await fetch(`${API_BASE_URL}/bank-accounts/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ ok: true; name: string; deleted: number }>(response);
+}
+
 export interface AnnounceResult {
   ok: true;
   threadId?: string;
