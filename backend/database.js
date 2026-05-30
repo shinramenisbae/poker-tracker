@@ -116,6 +116,18 @@ db.serialize(() => {
     )
   `);
 
+  // bank_accounts: per-player bank details for the bot's Discord settlement
+  // messages. Keyed by canonical player name (exact match, same as the bot's
+  // lookup). Edited from the Manage Players page.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS bank_accounts (
+      name        TEXT PRIMARY KEY,
+      displayName TEXT,
+      account     TEXT,
+      updatedAt   TEXT NOT NULL
+    )
+  `);
+
   // Migration: add method column if it doesn't exist (for existing DBs)
   db.run(`ALTER TABLE buyIns ADD COLUMN method TEXT DEFAULT 'cash'`, (err) => {
     // Ignore error if column already exists
