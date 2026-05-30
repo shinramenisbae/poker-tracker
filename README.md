@@ -157,10 +157,12 @@ When a session ends, the app calculates settlements:
 
 ## Deployment
 
-The included `deploy.sh` script builds the frontend, copies it to `/var/www/poker-tracker/`, and restarts the systemd services:
+The included `deploy.sh` script builds the frontend, copies it to `/var/www/poker-tracker/`, and restarts the backend service:
 
-- `poker-tracker.service` — serves the frontend (port 5000)
+- **Frontend** (port 5000) — static build served by nginx from `/var/www/poker-tracker/` (no dedicated systemd unit)
 - `tribe-poker-backend.service` — runs the API server (port 5001)
+
+The app is deployed on a Hetzner Cloud VPS, reachable at `https://srv1346724.hstgr.cloud`.
 
 ```bash
 chmod +x deploy.sh
