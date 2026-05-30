@@ -922,6 +922,53 @@ app.put('/api/alias-mappings/:alias', (req, res) => {
   );
 });
 
+// --- Bank accounts API ---
+// Player bank details for the bot's Discord settlement messages. Keyed by
+// canonical player name (exact match, same as the bot's lookup).
+
+// GET /api/bank-accounts → { accounts: { "<name>": { displayName, account } } }
+app.get('/api/bank-accounts', (req, res) => {
+  db.all('SELECT name, displayName, account FROM bank_accounts', [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const accounts = {};
+    for (const r of rows) {
+      accounts[r.name] = { displayName: r.displayName || '', account: r.account || '' };
+    }
+    res.json({ accounts });
+  });
+});
+
+// PUT /api/bank-accounts/:name — upsert { displayName, account }
+app.put('/api/bank-accounts/:name', (req, res) => {
+  const name = (req.params.name || '').trim();
+  const displayName = ((req.body && req.body.displayName) || '').trim();
+  const account = ((req.body && req.body.account) || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  if (!displayName && !account) {
+    return res.status(400).json({ error: 'Provide displayName and/or account, or use DELETE to clear.' });
+  }
+  const now = new Date().toISOString();
+  db.run(
+    `INSERT INTO bank_accounts (name, displayName, account, updatedAt) VALUES (?, ?, ?, ?)
+     ON CONFLICT(name) DO UPDATE SET displayName = excluded.displayName, account = excluded.account, updatedAt = excluded.updatedAt`,
+    [name, displayName, account, now],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ name, displayName, account });
+    }
+  );
+});
+
+// DELETE /api/bank-accounts/:name — remove a player's bank details
+app.delete('/api/bank-accounts/:name', (req, res) => {
+  const name = (req.params.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name required' });
+  db.run('DELETE FROM bank_accounts WHERE name = ?', [name], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ ok: true, name, deleted: this.changes });
+  });
+});
+
 // --- Hand log / all-in EV API ---
 
 const { computeSessionEv } = require('./handlog/ev');
