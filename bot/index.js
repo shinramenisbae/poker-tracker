@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration } from 'discord.js';
 import { GoogleGenAI, Type } from '@google/genai';
+import { classifyAttachment, attachmentTrigger } from './triage.js';
+import { createKeyedSerializer } from './serialize.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -192,14 +194,12 @@ async function collectThreadAttachments(thread) {
     if (batch.size === 0) break;
     for (const msg of batch.values()) {
       for (const att of msg.attachments.values()) {
-        const name = att.name || '';
-        const ct = (att.contentType || '').toLowerCase();
-        const isCsv = /\.csv$/i.test(name) || ct.includes('csv');
-        if (isCsv && /^poker_now_log_/i.test(name)) {
-          handLogCsvs.push({ url: att.url, name, createdAt: msg.createdTimestamp });
-        } else if (isCsv) {
-          ledgerCsvs.push({ url: att.url, name, createdAt: msg.createdTimestamp });
-        } else if (ct.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
+        const kind = classifyAttachment(att);
+        if (kind === 'handlog') {
+          handLogCsvs.push({ url: att.url, name: att.name || '', createdAt: msg.createdTimestamp });
+        } else if (kind === 'ledger') {
+          ledgerCsvs.push({ url: att.url, name: att.name || '', createdAt: msg.createdTimestamp });
+        } else if (kind === 'image') {
           images.push({ url: att.url, createdAt: msg.createdTimestamp });
         }
       }
@@ -317,6 +317,41 @@ async function priorBotMessageStartsWith(thread, botUserId, prefix) {
   return false;
 }
 
+// Is the bot's most recent *status* message in this thread a "🛑 can't import
+// yet" block? Used so an attachment-less message (e.g. "ok mapped them") only
+// re-triggers an import when there's actually a pending alias block to clear —
+// not on every line of chatter. Newer status messages (🎲 results, 🎰 hand log)
+// mean the block was already resolved. One bounded fetch, no full scan.
+async function latestBotStatusIsBlock(thread, botUserId) {
+  const messages = await thread.messages.fetch({ limit: 20 }); // newest first
+  for (const msg of messages.values()) {
+    if (msg.author?.id !== botUserId) continue;
+    const c = msg.content || '';
+    if (c.startsWith('🛑')) return true;
+    if (c.startsWith('🎲') || c.startsWith('🎰')) return false;
+  }
+  return false;
+}
+
+// Has the bot ever posted a "🎲 Session results" message in this thread? A true
+// result means the thread was successfully imported at least once. Used by the
+// startup catch-up scan to distinguish a never-imported thread (safe to import)
+// from one whose session was deliberately deleted (must NOT be resurrected).
+// Paginates fully so an old results post beyond the 20-message window isn't missed.
+async function threadHasResultsPost(thread, botUserId) {
+  let before;
+  while (true) {
+    const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (batch.size === 0) break;
+    for (const msg of batch.values()) {
+      if (msg.author?.id === botUserId && (msg.content || '').startsWith('🎲')) return true;
+    }
+    if (batch.size < 100) break;
+    before = batch.last().id;
+  }
+  return false;
+}
+
 async function processHandLogIfNeeded(thread, sessionId, handLogCsvs) {
   if (await isHandLogUploaded(sessionId)) return;
 
@@ -355,8 +390,29 @@ async function processHandLogIfNeeded(thread, sessionId, handLogCsvs) {
   );
 }
 
+// -------- per-thread serialization --------
+// processThreadUnlocked has several awaits between "does a session already exist
+// for this thread?" and "create the session". Two messages in the same thread
+// arriving within that window would both pass the existence check and both
+// import → duplicate sessions (seen in the logs as two imports ~1s apart).
+// Serialize work per thread: the second call runs only after the first settles,
+// by which point it finds the session the first just created and short-circuits.
+const runExclusive = createKeyedSerializer();
+
 // -------- Core: process a thread that may have an online ledger --------
-async function processThread(thread) {
+//
+// `trigger` says why we're processing the thread and gates whether a brand-new
+// session may be created (the source of the duplicate-import bug):
+//   'upload'  → a ledger/screenshot was just posted: import is allowed
+//   'handlog' → only a hand log was posted: attach to an existing session, never create
+//   'retry'   → attachment-less message clearing a pending 🛑 alias block: import allowed
+//   'scan'    → startup catch-up: import only threads never imported before, so a
+//               deliberately deleted session is not silently resurrected
+function processThread(thread, trigger) {
+  return runExclusive(thread.id, () => processThreadUnlocked(thread, trigger));
+}
+
+async function processThreadUnlocked(thread, trigger) {
   const threadId = thread.id;
 
   // 1. If already imported, just handle the hand-log side and return.
@@ -366,6 +422,17 @@ async function processThread(thread) {
     await processHandLogIfNeeded(thread, existingSession.id, handLogCsvs);
     return;
   }
+
+  // 1b. No linked session — decide whether we're allowed to create one.
+  // This is the guard that stops unrelated chatter, or a restart, from
+  // re-importing a thread whose session was deleted out from under us.
+  let allowImport;
+  if (trigger === 'scan') {
+    allowImport = !(await threadHasResultsPost(thread, client.user.id));
+  } else {
+    allowImport = trigger === 'upload' || trigger === 'retry';
+  }
+  if (!allowImport) return;
 
   // 2. Collect attachments and decide source.
   const { images, csvs, handLogCsvs } = await collectThreadAttachments(thread);
@@ -590,7 +657,20 @@ client.on('messageCreate', async (msg) => {
     const isThread = [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
     if (!isThread) return;
     if (ch.parentId !== DISCORD_CHANNEL_ID) return;
-    await processThread(ch);
+
+    // Only act on messages that actually carry work. Plain chatter ("paid",
+    // "lol", @mentions) must not trigger a re-import or hand-log re-parse —
+    // that was the duplicate-session bug.
+    const kinds = [...msg.attachments.values()].map(classifyAttachment);
+    const trigger = attachmentTrigger(kinds);
+    if (trigger) {
+      await processThread(ch, trigger);
+    } else if (await latestBotStatusIsBlock(ch, client.user.id)) {
+      // Attachment-less message, but there's a pending "🛑 can't import yet"
+      // block: treat it as the user signalling they've mapped the aliases.
+      await processThread(ch, 'retry');
+    }
+    // Otherwise: ignore.
   } catch (err) {
     console.error('messageCreate error:', err);
   }
@@ -598,10 +678,11 @@ client.on('messageCreate', async (msg) => {
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}.`);
-  // Catch-up scan: process every thread in the watched channel once on startup.
-  // Same logic as messageCreate — if all aliases mapped, imports + posts results;
-  // if unmapped, posts the "🛑 Can't import yet" message. Lets the bot recover
-  // from downtime and handle threads created before deploy.
+  // Catch-up scan: process every thread in the watched channel once on startup,
+  // to recover threads created/posted while the bot was offline. Runs with the
+  // 'scan' trigger, which imports a thread only if it was never imported before
+  // (no prior 🎲 results post) — so a session deliberately deleted between
+  // restarts is NOT silently re-created.
   try {
     const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
     if (!channel || channel.type !== ChannelType.GuildText) {
@@ -620,7 +701,7 @@ client.once('ready', async () => {
     }
     console.log(`Startup scan: ${threads.size} threads to check.`);
     for (const thread of threads.values()) {
-      try { await processThread(thread); }
+      try { await processThread(thread, 'scan'); }
       catch (err) { console.error(`Startup scan thread ${thread.id} (${thread.name}):`, err.message); }
     }
     console.log('Startup scan complete.');
