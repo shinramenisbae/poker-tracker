@@ -53,7 +53,7 @@ export function NewSession() {
 
       const newSession = await addSession(session);
       navigate(`/session/${newSession.id}`);
-    } catch (err) {
+    } catch {
       setError('Failed to create session. Please try again.');
       setIsCreating(false);
     }

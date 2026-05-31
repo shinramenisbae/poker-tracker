@@ -24,7 +24,7 @@ export function Home() {
         setDeleteError(null);
         await deleteSession(sessionId);
         setDeleteConfirm(null);
-      } catch (err) {
+      } catch {
         setDeleteError('Failed to delete session. Please try again.');
         setDeleteConfirm(null);
       }

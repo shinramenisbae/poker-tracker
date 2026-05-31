@@ -5,6 +5,16 @@ import {
 } from 'recharts';
 import type { PlayerStyleStats } from '../api';
 
+type StylePoint = {
+  name: string;
+  vpip: number;
+  pfr: number;
+  hands: number;
+  af: number | null;
+  sessions: number;
+  faded: boolean;
+};
+
 interface Props {
   data: PlayerStyleStats[];
   minHands?: number; // qualifying threshold for the group medians + axis range
@@ -110,7 +120,7 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
             cursor={false}
             content={({ payload }) => {
               if (!payload || payload.length === 0) return null;
-              const p: any = payload[0].payload;
+              const p = payload[0].payload as StylePoint;
               const style = styleLabel(p.vpip, p.pfr, vpipMid, pfrMid);
               return (
                 <div className="bg-bg-primary border border-bg-tertiary rounded p-2 text-xs">
@@ -130,9 +140,9 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
 
           <Scatter
             data={points}
-            shape={(props: any) => {
+            shape={(props: { cx?: number; cy?: number; payload?: StylePoint }) => {
               const { cx, cy, payload } = props;
-              if (cx == null || cy == null) return null;
+              if (cx == null || cy == null || !payload) return null;
               const faded = payload.faded;
               return (
                 <g>
