@@ -1,0 +1,71 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    name: Build & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            app/package-lock.json
+            backend/package-lock.json
+
+      # Frontend: install, type-check + build, lint. This is where breakage
+      # (TS errors, ESLint failures) would otherwise reach the server.
+      - name: Frontend build + lint
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
+          npm run lint
+
+      # Backend has no build/test step — just verify dependencies resolve.
+      - name: Backend install
+        working-directory: backend
+        run: npm ci
+
+      # Bot has no lockfile, so use a plain install as a dependency sanity check.
+      - name: Bot install
+        working-directory: bot
+        run: npm install --no-audit --no-fund
+
+  deploy:
+    name: Deploy to VPS
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull + build + restart on the VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            cd /root/.openclaw/workspace/poker-tracker
+            OLD=$(git rev-parse HEAD)
+            git pull --ff-only
+            NEW=$(git rev-parse HEAD)
+            # Builds the frontend and restarts tribe-poker-backend.service.
+            bash deploy.sh
+            # Smart restart: only bounce the bot when bot/ code changed.
+            if git diff --name-only "$OLD" "$NEW" | grep -q '^bot/'; then
+              echo "bot/ changed — restarting bot"
+              systemctl restart tribe-poker-bot.service
+              sleep 3
+              systemctl is-active tribe-poker-bot.service
+            else
+              echo "bot/ unchanged — leaving bot running"
+            fi
