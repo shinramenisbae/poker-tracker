@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSettings } from '../hooks/useStorage';
-import { importSpreadsheet, clearImportedSessions } from '../api';
+import { importSpreadsheet, clearImportedSessions, getApiToken, setApiToken } from '../api';
 import type { ImportResult } from '../api';
 
 export function Settings() {
@@ -11,6 +11,8 @@ export function Settings() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [apiToken, setApiTokenInput] = useState(getApiToken());
+  const [tokenSaved, setTokenSaved] = useState(false);
 
   const currencies = [
     { code: 'USD', symbol: '$', name: 'US Dollar' },
@@ -163,6 +165,32 @@ export function Settings() {
                 className="py-3 px-4 rounded-lg font-medium transition-all bg-bg-tertiary text-text-secondary hover:bg-accent-negative/10 hover:text-accent-negative disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {clearing ? 'Clearing...' : 'Clear Imported'}
+              </button>
+            </div>
+          </div>
+
+          {/* API Access */}
+          <div className="card">
+            <h2 className="text-lg font-semibold text-text-primary mb-4">API Access</h2>
+            <p className="text-text-secondary text-sm mb-4">
+              Only needed if the server has API auth enabled. Paste the shared
+              access token here and it'll be sent with every request from this
+              device. Leave blank if auth is off.
+            </p>
+            <div className="flex gap-3">
+              <input
+                type="password"
+                value={apiToken}
+                onChange={(e) => { setApiTokenInput(e.target.value); setTokenSaved(false); }}
+                placeholder="API token"
+                autoComplete="off"
+                className="flex-1 py-3 px-4 rounded-lg bg-bg-tertiary text-text-primary placeholder:text-text-tertiary border border-transparent focus:border-accent-primary outline-none"
+              />
+              <button
+                onClick={() => { setApiToken(apiToken); setTokenSaved(true); }}
+                className="py-3 px-4 rounded-lg font-medium transition-all bg-accent-primary text-white hover:bg-accent-primary/90"
+              >
+                {tokenSaved ? 'Saved ✓' : 'Save'}
               </button>
             </div>
           </div>
