@@ -118,6 +118,27 @@ app.use(cors({
 // (a busy session can be a few MB of CSV text).
 app.use(express.json({ limit: '20mb' }));
 
+// --- Optional shared-secret auth -------------------------------------------
+// Off by default: if API_TOKEN is unset the server behaves exactly as before,
+// so deploying this is a no-op until you opt in. When API_TOKEN is set in the
+// backend's environment (e.g. via systemd `Environment=API_TOKEN=...`), EVERY
+// request — reads included, since GET /api/bank-accounts exposes account
+// numbers — must present the token via `x-api-token: <token>` or
+// `Authorization: Bearer <token>`. CORS preflights pass through untouched.
+//
+// The frontend stores the token in localStorage (Settings → API access) and
+// attaches it automatically; the Discord bot reads it from TRACKER_API_TOKEN.
+const API_TOKEN = (process.env.API_TOKEN || '').trim();
+if (API_TOKEN) console.log('API auth: ENABLED (token required on all /api requests).');
+app.use((req, res, next) => {
+  if (!API_TOKEN) return next();              // auth disabled
+  if (req.method === 'OPTIONS') return next(); // let CORS preflight through
+  const provided = req.get('x-api-token')
+    || (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  if (provided && provided === API_TOKEN) return next();
+  return res.status(401).json({ error: 'Unauthorized: missing or invalid API token' });
+});
+
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }

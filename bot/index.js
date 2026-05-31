@@ -35,7 +35,15 @@ const {
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-2.5-flash',
   BOT_HTTP_PORT = '6300',
+  // Only needed if the tracker backend has API_TOKEN auth enabled. Sent as
+  // `x-api-token` on every tracker request; harmless when auth is off.
+  TRACKER_API_TOKEN = '',
 } = process.env;
+
+// Merge the API token into a headers object when configured.
+function withApiToken(headers = {}) {
+  return TRACKER_API_TOKEN ? { ...headers, 'x-api-token': TRACKER_API_TOKEN } : headers;
+}
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
@@ -105,14 +113,14 @@ async function classifyImage(url) {
 
 // -------- tracker API helpers --------
 async function trackerGet(path) {
-  const res = await fetch(`${TRACKER_API_BASE}${path}`);
+  const res = await fetch(`${TRACKER_API_BASE}${path}`, { headers: withApiToken() });
   if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${await res.text()}`);
   return res.json();
 }
 async function trackerPost(path, body) {
   const res = await fetch(`${TRACKER_API_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withApiToken({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`POST ${path} → ${res.status}: ${await res.text()}`);
@@ -121,7 +129,7 @@ async function trackerPost(path, body) {
 async function trackerPut(path, body) {
   const res = await fetch(`${TRACKER_API_BASE}${path}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withApiToken({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`PUT ${path} → ${res.status}: ${await res.text()}`);
@@ -363,7 +371,7 @@ async function processHandLogIfNeeded(thread, sessionId, handLogCsvs) {
       const text = await (await fetch(handLogCsvs[0].url)).text();
       const res = await fetch(`${TRACKER_API_BASE}/sessions/${sessionId}/handlog`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: withApiToken({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ rawLog: text }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

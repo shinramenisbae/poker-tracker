@@ -3,12 +3,12 @@ name: CI/CD
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, claude/tracker-deployment-location-n2eoA]
   workflow_dispatch:
 
 jobs:
   ci:
-    name: Build & lint
+    name: Build, lint & test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,15 +30,19 @@ jobs:
           npm run build
           npm run lint
 
-      # Backend has no build/test step — just verify dependencies resolve.
-      - name: Backend install
+      # Backend: install deps, then run the EV/equity/parser + stats unit tests.
+      - name: Backend install + test
         working-directory: backend
-        run: npm ci
+        run: |
+          npm ci
+          npm test
 
-      # Bot has no lockfile, so use a plain install as a dependency sanity check.
-      - name: Bot install
+      # Bot has no lockfile, so use a plain install, then run its unit tests.
+      - name: Bot install + test
         working-directory: bot
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund
+          npm test
 
   deploy:
     name: Deploy to VPS

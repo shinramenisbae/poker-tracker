@@ -1,0 +1,12 @@
+[Unit]
+Description=Poker tracker SQLite backup (consistent snapshot + integrity check)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust the path if the repo lives elsewhere on the box.
+ExecStart=/root/.openclaw/workspace/poker-tracker/scripts/backup-db.sh
+# To enable off-box copies, drop an override with:
+#   systemctl edit poker-backup.service
+# and add e.g.  Environment=POKER_BACKUP_RCLONE_REMOTE=gdrive:poker-backups

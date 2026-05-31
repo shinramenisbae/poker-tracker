@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Discord bot that imports online ledger screenshots into the poker tracker and announces session results (online or in-person).",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
