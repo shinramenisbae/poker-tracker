@@ -169,6 +169,8 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
+Merges to `main` deploy automatically via GitHub Actions — see [docs/cicd.md](docs/cicd.md). `deploy.sh` remains available for manual deploys.
+
 ## App Pages
 
 - **Home** (`/`) — View active and completed sessions, create new ones
