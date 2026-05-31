@@ -43,7 +43,7 @@ jobs:
   deploy:
     name: Deploy to VPS
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - name: Pull + build + restart on the VPS
@@ -70,3 +70,7 @@ jobs:
             else
               echo "bot/ unchanged — leaving bot running"
             fi
+            # Health check — fail the deploy loudly if the site isn't serving.
+            echo "Health check..."
+            curl -fsS -o /dev/null https://srv1346724.hstgr.cloud/ && echo "frontend OK"
+            curl -fsS -o /dev/null https://srv1346724.hstgr.cloud/api/sessions && echo "backend OK"
