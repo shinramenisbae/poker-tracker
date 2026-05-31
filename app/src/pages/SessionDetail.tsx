@@ -75,7 +75,7 @@ export function SessionDetail() {
 
       setNewPlayerName('');
       setShowAddPlayer(false);
-    } catch (err) {
+    } catch {
       setActionError('Failed to add player. Please try again.');
     } finally {
       setActionLoading(false);
@@ -90,7 +90,7 @@ export function SessionDetail() {
 
     try {
       await addPlayerBuyIn(session.id, playerId, amount, method);
-    } catch (err) {
+    } catch {
       setActionError('Failed to add buy-in. Please try again.');
     } finally {
       setActionLoading(false);
@@ -106,7 +106,7 @@ export function SessionDetail() {
     try {
       await cashOutPlayerApi(session.id, playerId, amount);
       setCashOutPlayer(null);
-    } catch (err) {
+    } catch {
       setActionError('Failed to cash out player. Please try again.');
     } finally {
       setActionLoading(false);
@@ -130,7 +130,7 @@ export function SessionDetail() {
     setActionError(null);
     try {
       await updatePlayerBuyIn(session.id, playerId, buyInId, amount, method);
-    } catch (err) {
+    } catch {
       setActionError('Failed to update buy-in. Please try again.');
     } finally {
       setActionLoading(false);
@@ -143,7 +143,7 @@ export function SessionDetail() {
     setActionError(null);
     try {
       await deletePlayerBuyIn(session.id, playerId, buyInId);
-    } catch (err) {
+    } catch {
       setActionError('Failed to delete buy-in. Please try again.');
     } finally {
       setActionLoading(false);
@@ -163,7 +163,7 @@ export function SessionDetail() {
         bankPlayerId: bankId,
       });
       navigate(`/session/${session.id}/results`);
-    } catch (err) {
+    } catch {
       setActionError('Failed to end session. Please try again.');
       setActionLoading(false);
     }

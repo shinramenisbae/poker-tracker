@@ -64,7 +64,7 @@ export function useSessions() {
       try {
         const data = await apiFetchSessions();
         // Ensure each session has a players array
-        const normalized = data.map((s: any) => ({
+        const normalized = data.map((s) => ({
           ...s,
           players: Array.isArray(s.players) ? s.players : [],
         }));
@@ -88,7 +88,7 @@ export function useSessions() {
     setError(null);
     try {
       const data = await apiFetchSessions();
-      const normalized = data.map((s: any) => ({
+      const normalized = data.map((s) => ({
         ...s,
         players: Array.isArray(s.players) ? s.players : [],
       }));

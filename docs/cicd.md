@@ -61,3 +61,10 @@ The pipeline needs SSH access to the VPS. This only has to be done once.
   VPS across deploys.
 - `deploy.sh` is unchanged and can still be run manually on the server.
 - **Rollback:** revert the offending commit on `main`; the revert auto-deploys.
+
+## Status
+
+- ✅ Pipeline verified end-to-end on 2026-05-31: push to `main` → CI (build +
+  lint) → SSH deploy → health check, all green.
+- ✅ Commit attribution confirmed: deploys are authored under the maintainer's
+  GitHub identity.

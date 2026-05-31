@@ -292,15 +292,13 @@ function LifetimePnLChart({
     const sorted = [...sessionHistory].sort(
       (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
-    let runningTotal = 0;
-    return sorted.map((session, index) => {
-      runningTotal += session.profitLoss;
-      return {
-        sessionNumber: index + 1,
-        date: session.date,
-        pnl: runningTotal,
-      };
-    });
+    return sorted.map((session, index) => ({
+      sessionNumber: index + 1,
+      date: session.date,
+      pnl: sorted
+        .slice(0, index + 1)
+        .reduce((total, s) => total + s.profitLoss, 0),
+    }));
   }, [sessionHistory]);
 
   if (cumulativeData.length === 0) {
