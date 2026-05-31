@@ -1,9 +1,8 @@
-# Hardening: backups, API auth, tests
+# Hardening: backups and tests
 
-This covers the three robustness features added to protect the tracker's data
-and the EV engine. **Auth and off-box backups are opt-in** — nothing here
-changes runtime behaviour until you turn it on, so merging/deploying this is
-safe.
+Two robustness features that protect the tracker's data and the EV engine.
+**Off-box backups are opt-in**; nothing here changes runtime behaviour, so
+merging/deploying this is safe.
 
 ---
 
@@ -56,41 +55,7 @@ systemctl start tribe-poker-backend.service
 
 ---
 
-## 2. API auth (opt-in)
-
-The backend API had no auth, and it's served on a public host with destructive
-endpoints (`DELETE /api/players/:name`, `POST /api/players/merge`,
-`DELETE /api/sessions/:id`). A shared-secret token now gates **all** `/api`
-requests (reads included, since `GET /api/bank-accounts` exposes account
-numbers) — but only when `API_TOKEN` is set in the backend environment.
-
-- **Disabled (default):** `API_TOKEN` unset → behaves exactly as before.
-- **Enabled:** every request must send `x-api-token: <token>` (or
-  `Authorization: Bearer <token>`). CORS preflights pass through.
-
-### Enable it
-
-1. Pick a long random token: `openssl rand -hex 32`
-2. Set it on the backend service:
-   ```bash
-   systemctl edit tribe-poker-backend.service
-   # [Service]
-   # Environment=API_TOKEN=<paste>
-   systemctl restart tribe-poker-backend.service   # log shows "API auth: ENABLED"
-   ```
-3. Tell the clients the same token:
-   - **Web UI:** Settings → API Access → paste → Save (stored in `localStorage`,
-     sent automatically thereafter).
-   - **Discord bot:** set `TRACKER_API_TOKEN=<same>` in `bot/.env`, restart the
-     bot service.
-
-> Note: the web token lives in the browser, so this is a shared-password
-> "keep drive-by scanners and randos out" control, not per-user identity. For a
-> stronger perimeter, also put nginx HTTP basic-auth in front of the whole site.
-
----
-
-## 3. Tests
+## 2. Tests
 
 The EV / equity / parser engine — the most complex, math-heavy code in the
 repo — now has unit tests (`backend/handlog/*.test.js`), alongside the existing
