@@ -87,3 +87,53 @@ test('computeSessionEv: a fold-out (no shown all-in) is not EV-eligible', () => 
   // Uncalled portion of the raise is returned, so A nets just the BB they won.
   assert.equal(hands[0].perPlayer['A @ 1'].expectedNet, hands[0].perPlayer['A @ 1'].actualNet);
 });
+
+// Regression: the most common all-in pattern is a shove that a BIGGER stack
+// CALLS. PokerNow only tags the shover "...and go all in"; the caller has chips
+// behind so their line is a plain "calls X" (not tagged all-in). So the hand
+// has exactly ONE declared all-in. The old gate required >=2 declared all-ins
+// and silently dropped these real races (3 eligible instead of 9 on a real
+// 191-hand log). It must now qualify off the two-way showdown.
+test('computeSessionEv: shove + covering call (1 declared all-in) IS EV-eligible', () => {
+  const log = buildLog([
+    `-- starting hand #3 (id: hand3) No Limit Texas Hold'em (dealer: "A @ 1") --`,
+    `Player stacks: "A @ 1" (50.00) | "B @ 2" (200.00)`, // B covers A
+    `"A @ 1" posts a small blind of 0.50`,
+    `"B @ 2" posts a big blind of 1.00`,
+    `"A @ 1" raises to 50.00 and go all in`,             // shover: tagged all-in
+    `"B @ 2" calls 50.00`,                                // caller: NOT tagged (chips behind)
+    `Flop:  [2♣, 7♦, 9♠]`,
+    `Turn: 2♣, 7♦, 9♠ [J♥]`,
+    `River: 2♣, 7♦, 9♠, J♥ [3♣]`,
+    `"A @ 1" shows a A♥, A♦.`,
+    `"B @ 2" shows a K♥, K♦.`,
+    `"A @ 1" collected 100.00 from pot`,
+    `-- ending hand #3 --`,
+  ]);
+  const { hands } = computeSessionEv(log, { samples: 4000 });
+  assert.equal(hands[0].hasAllInEv, true, 'a shove + covering call must qualify');
+  const pp = hands[0].perPlayer;
+  assert.ok(pp['A @ 1'].isAllInEv && pp['B @ 2'].isAllInEv);
+  // AA ~82% of the 100 pot → expected net ≈ +64; both sides EV-charted, zero-sum.
+  assert.ok(pp['A @ 1'].expectedNet > 27 && pp['A @ 1'].expectedNet < 37,
+    `AA expected net ~+32, got ${pp['A @ 1'].expectedNet}`);
+  assert.ok(Math.abs(pp['A @ 1'].expectedNet + pp['B @ 2'].expectedNet) < 1e-9, 'expected nets zero-sum');
+});
+
+// A lone shove that everyone FOLDS to (one declared all-in, no second committed
+// player) must still be excluded — relaxing the gate to >=1 must not let these
+// through. This is what the showdownCommitted >= 2 check guards.
+test('computeSessionEv: uncalled shove (everyone folds) is NOT EV-eligible', () => {
+  const log = buildLog([
+    `-- starting hand #4 (id: hand4) No Limit Texas Hold'em (dealer: "A @ 1") --`,
+    `Player stacks: "A @ 1" (50.00) | "B @ 2" (50.00)`,
+    `"A @ 1" posts a small blind of 0.50`,
+    `"B @ 2" posts a big blind of 1.00`,
+    `"A @ 1" raises to 50.00 and go all in`,
+    `"B @ 2" folds`,
+    `"A @ 1" collected 2.00 from pot`,
+    `-- ending hand #4 --`,
+  ]);
+  const { hands } = computeSessionEv(log, { samples: 1000 });
+  assert.equal(hands[0].hasAllInEv, false, 'an uncalled shove has no showdown to compute equity over');
+});
