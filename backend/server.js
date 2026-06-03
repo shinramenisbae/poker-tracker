@@ -256,8 +256,14 @@ app.post('/api/sessions', (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?)
         `);
         
-        const cashOutAmount = player.cashOut?.amount || null;
-        const cashOutDate = player.cashOut?.timestamp ? new Date(player.cashOut.timestamp).toISOString() : null;
+        // Use ?? (not ||) so a real $0 cash-out is stored as 0, not dropped to
+        // null. Online imports (bot) send cashOut.amount = 0 for players who
+        // busted/cashed nothing; with || those rows looked like "never cashed
+        // out", leaving the session unfinishable on the Results page.
+        const cashOutAmount = player.cashOut?.amount ?? null;
+        const cashOutDate = player.cashOut
+          ? new Date(player.cashOut.timestamp ?? Date.now()).toISOString()
+          : null;
         
         playerStmt.run(
           player.id,
