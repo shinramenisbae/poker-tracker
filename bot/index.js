@@ -804,6 +804,46 @@ app.post('/announce/:sessionId', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true, user: client.user?.tag }));
 
+// POST /repost/:sessionId — post a FRESH results message into the session's
+// existing Discord thread (or create one if somehow missing). Unlike /announce,
+// this does not short-circuit when the session is already announced — it's for
+// re-posting after the results format changed (e.g. cash/bank split, role
+// mention). Idempotency is intentionally not enforced: each call posts again.
+app.post('/repost/:sessionId', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    const session = await trackerGet(`/sessions/${sessionId}`);
+
+    // Reuse the linked thread if present; otherwise make a new one.
+    const threadId = session.discordThreadId
+      || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
+
+    let thread;
+    if (threadId) {
+      thread = await client.channels.fetch(threadId).catch(() => null);
+    }
+    if (!thread) {
+      const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+      if (!channel || channel.type !== ChannelType.GuildText) {
+        return res.status(500).json({ error: `Channel ${DISCORD_CHANNEL_ID} not a text channel` });
+      }
+      const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
+      thread = await channel.threads.create({
+        name: threadName,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: 'Poker tracker results repost',
+      });
+      await trackerPut(`/sessions/${sessionId}`, { discordThreadId: thread.id });
+    }
+
+    await postResultsMessage(thread, session);
+    res.json({ ok: true, threadId: thread.id, reposted: true });
+  } catch (err) {
+    console.error('repost error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 app.listen(Number(BOT_HTTP_PORT), '127.0.0.1', () => {
   console.log(`Bot HTTP listening on http://127.0.0.1:${BOT_HTTP_PORT}`);
 });
