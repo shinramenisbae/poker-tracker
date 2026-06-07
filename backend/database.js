@@ -128,6 +128,32 @@ db.serialize(() => {
     )
   `);
 
+  // discord_links: maps a Discord user id to a canonical player name, so the
+  // bot can resolve "/paid" (from a Discord user) to the right player's debt,
+  // and @mention the right user in payment reminders. Populated by the bot's
+  // /paid slash command (a user links themselves on first use).
+  db.run(`
+    CREATE TABLE IF NOT EXISTS discord_links (
+      discordUserId TEXT PRIMARY KEY,
+      playerName    TEXT NOT NULL,
+      updatedAt     TEXT NOT NULL
+    )
+  `);
+
+  // session_payments: tracks which losing players have paid their settlement
+  // for a given session. Absence of a row = unpaid. Keyed by (sessionId,
+  // playerName). Drives the daily 10am NZT unpaid-reminder.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS session_payments (
+      sessionId   TEXT NOT NULL,
+      playerName  TEXT NOT NULL,
+      paidAt      TEXT NOT NULL,
+      paidBy      TEXT,
+      PRIMARY KEY (sessionId, playerName),
+      FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+
   // Migration: add method column if it doesn't exist (for existing DBs)
   db.run(`ALTER TABLE buyIns ADD COLUMN method TEXT DEFAULT 'cash'`, (err) => {
     // Ignore error if column already exists
