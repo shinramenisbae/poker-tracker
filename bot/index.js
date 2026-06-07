@@ -677,6 +677,28 @@ async function fetchBankAccounts() {
   }
 }
 
+// Delete the bot's own prior results posts in a thread (those starting with the
+// 🎲 results marker). Returns how many were deleted. Used by /repost?clean=true
+// so refreshing a session's results doesn't leave stale duplicate posts behind.
+// Paginates fully so an older post beyond the first page is still removed.
+async function deletePriorResultsPosts(thread, botUserId) {
+  let deleted = 0;
+  let before;
+  while (true) {
+    const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (batch.size === 0) break;
+    for (const msg of batch.values()) {
+      if (msg.author?.id === botUserId && (msg.content || '').startsWith('🎲')) {
+        try { await msg.delete(); deleted++; }
+        catch (err) { console.error(`Could not delete message ${msg.id}:`, err.message); }
+      }
+    }
+    if (batch.size < 100) break;
+    before = batch.last().id;
+  }
+  return deleted;
+}
+
 async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
   const bankAccounts = await fetchBankAccounts();
@@ -809,8 +831,13 @@ app.get('/health', (req, res) => res.json({ ok: true, user: client.user?.tag }))
 // this does not short-circuit when the session is already announced — it's for
 // re-posting after the results format changed (e.g. cash/bank split, role
 // mention). Idempotency is intentionally not enforced: each call posts again.
+//
+// ?clean=true first deletes the bot's prior 🎲 results post(s) in the thread, so
+// refreshing doesn't pile up duplicates. Only the bot's own results messages are
+// removed — human chatter and other bot posts (🎰 hand log, 🛑 blocks) are left.
 app.post('/repost/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
+  const clean = req.query.clean === 'true';
   try {
     const session = await trackerGet(`/sessions/${sessionId}`);
 
@@ -822,6 +849,7 @@ app.post('/repost/:sessionId', async (req, res) => {
     if (threadId) {
       thread = await client.channels.fetch(threadId).catch(() => null);
     }
+    let createdThread = false;
     if (!thread) {
       const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
       if (!channel || channel.type !== ChannelType.GuildText) {
@@ -834,10 +862,18 @@ app.post('/repost/:sessionId', async (req, res) => {
         reason: 'Poker tracker results repost',
       });
       await trackerPut(`/sessions/${sessionId}`, { discordThreadId: thread.id });
+      createdThread = true;
+    }
+
+    // Clean up old results posts before adding the new one (skip on a brand-new
+    // thread — nothing to clean).
+    let cleaned = 0;
+    if (clean && !createdThread) {
+      cleaned = await deletePriorResultsPosts(thread, client.user.id);
     }
 
     await postResultsMessage(thread, session);
-    res.json({ ok: true, threadId: thread.id, reposted: true });
+    res.json({ ok: true, threadId: thread.id, reposted: true, cleaned });
   } catch (err) {
     console.error('repost error:', err);
     res.status(500).json({ error: err.message || String(err) });
