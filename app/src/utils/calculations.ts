@@ -37,7 +37,11 @@ export function identifyBankPlayer(session: Session): string | null {
 }
 
 export function calculateSettlements(session: Session): Settlement[] {
-  const bankId = session.bankPlayerId;
+  // Online sessions imported by the bot are created already `completed` and
+  // never have a bankPlayerId set (only the in-person "End Session" flow sets
+  // it). Fall back to the computed biggest-winner so settlement still works.
+  // Computed at view time, so this also retroactively fixes existing imports.
+  const bankId = session.bankPlayerId ?? identifyBankPlayer(session);
   if (!bankId) return [];
 
   // Cash pool = all cash buy-ins from every player (physically on the table)
@@ -113,7 +117,10 @@ export function calculateSettlements(session: Session): Settlement[] {
 }
 
 export function getSettlementSummary(session: Session): SettlementSummary | null {
-  const bankId = session.bankPlayerId;
+  // Same fallback as calculateSettlements: use the stored bank player if set,
+  // otherwise the computed biggest winner (covers bot-imported online sessions
+  // that never had bankPlayerId assigned).
+  const bankId = session.bankPlayerId ?? identifyBankPlayer(session);
   const bankPlayer = session.players.find((p) => p.id === bankId);
   if (!bankId || !bankPlayer) return null;
 
