@@ -19,12 +19,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration } from 'discord.js';
+import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
 import { calculateSettlements } from './settlement.js';
+import { unpaidDebtors } from './unpaid.js';
+import { msUntilNextLocalHour } from './schedule.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,6 +41,12 @@ const {
   // Optional: a Discord role ID to @mention on each results post, so everyone
   // in the role gets pulled into the thread. Leave unset to disable mentions.
   DISCORD_POKER_ROLE_ID = '',
+  // Discord application (client) id — required to register the /paid slash
+  // command. Found in the Developer Portal; same as the bot user id.
+  DISCORD_APP_ID = '',
+  // Hour (0-23) and timezone for the daily unpaid-debt reminder.
+  PAYMENT_REMINDER_HOUR = '10',
+  PAYMENT_REMINDER_TZ = 'Pacific/Auckland',
 } = process.env;
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
@@ -130,6 +138,30 @@ async function trackerPut(path, body) {
   });
   if (!res.ok) throw new Error(`PUT ${path} → ${res.status}: ${await res.text()}`);
   return res.json();
+}
+async function trackerDelete(path) {
+  const res = await fetch(`${TRACKER_API_BASE}${path}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// -------- Discord links + payment state (via tracker API) --------
+async function getDiscordLinks() {
+  try { return (await trackerGet('/discord-links')).links || {}; }
+  catch (err) { console.error('getDiscordLinks failed:', err.message); return {}; }
+}
+async function linkDiscordUser(discordUserId, playerName) {
+  return trackerPut(`/discord-links/${encodeURIComponent(discordUserId)}`, { playerName });
+}
+async function getSessionPayments(sessionId) {
+  try { return (await trackerGet(`/sessions/${sessionId}/payments`)).paid || {}; }
+  catch (err) { console.error('getSessionPayments failed:', err.message); return {}; }
+}
+async function markPaid(sessionId, playerName, paidBy) {
+  return trackerPut(`/sessions/${sessionId}/payments/${encodeURIComponent(playerName)}`, { paidBy });
+}
+async function markUnpaid(sessionId, playerName) {
+  return trackerDelete(`/sessions/${sessionId}/payments/${encodeURIComponent(playerName)}`);
 }
 
 // Gemini OCR is non-deterministic on aliases with weird whitespace/emoji.
@@ -717,9 +749,194 @@ async function postResultsMessage(thread, session) {
   }
 }
 
+// -------- /paid slash command --------
+//
+// Resolves which session thread the command was used in, maps the Discord user
+// to a canonical player (or uses the named target), and marks them paid for
+// that session. First-time users are auto-linked to the player name they claim.
+
+const PAID_COMMAND = new SlashCommandBuilder()
+  .setName('paid')
+  .setDescription('Mark a player as having paid their debt for this session.')
+  .addStringOption((o) =>
+    o.setName('player')
+      .setDescription("Player name (defaults to you). The bank player can mark anyone.")
+      .setRequired(false)
+  );
+
+async function registerSlashCommands() {
+  if (!DISCORD_APP_ID) {
+    console.warn('DISCORD_APP_ID unset — skipping /paid slash command registration.');
+    return;
+  }
+  try {
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+    await rest.put(Routes.applicationCommands(DISCORD_APP_ID), { body: [PAID_COMMAND.toJSON()] });
+    console.log('Registered /paid slash command.');
+  } catch (err) {
+    console.error('Slash command registration failed:', err.message);
+  }
+}
+
+// Find the session linked to a given thread id (column first, notes fallback).
+async function findSessionByThreadId(threadId) {
+  const sessions = await trackerGet('/sessions');
+  return sessions.find((s) =>
+    s.discordThreadId === threadId || (s.notes || '').includes(`threadId=${threadId}`)
+  );
+}
+
+async function handlePaidCommand(interaction) {
+  // Must be used inside a session results thread.
+  const ch = interaction.channel;
+  const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
+  if (!isThread || ch.parentId !== DISCORD_CHANNEL_ID) {
+    return interaction.reply({ content: '⚠️ Use `/paid` inside a session results thread.', flags: MessageFlags.Ephemeral });
+  }
+
+  const session = await findSessionByThreadId(ch.id);
+  if (!session) {
+    return interaction.reply({ content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
+  }
+
+  const settlements = calculateSettlements(session);
+  // Debtors = players who owe a bank transfer.
+  const debtorNames = new Set(
+    settlements.filter((s) => (s.bankOwed || 0) > 0.005).map((s) => s.playerName)
+  );
+  const allNames = settlements.map((s) => s.playerName);
+
+  const links = await getDiscordLinks();
+  const requesterName = links[interaction.user.id];
+  const named = interaction.options.getString('player');
+
+  // Determine the target player.
+  let targetName;
+  if (named) {
+    // Resolve a named target case-insensitively against this session's players.
+    targetName = allNames.find((n) => n.toLowerCase() === named.trim().toLowerCase());
+    if (!targetName) {
+      return interaction.reply({ content: `⚠️ No player named **${named}** in this session.`, flags: MessageFlags.Ephemeral });
+    }
+  } else {
+    // No name → the requester marks themselves. Requires a known link.
+    if (!requesterName) {
+      return interaction.reply({
+        content: '⚠️ I don’t know who you are yet. Run `/paid player:<your name>` once and I’ll remember you.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+    targetName = requesterName;
+  }
+
+  // First-time self-link: if an unknown user runs "/paid player:<name>", remember
+  // them as that player so future bare "/paid" works and reminders can @ them.
+  if (named && !requesterName) {
+    try { await linkDiscordUser(interaction.user.id, targetName); } catch { /* non-fatal */ }
+  }
+
+  if (!debtorNames.has(targetName)) {
+    return interaction.reply({
+      content: `ℹ️ **${targetName}** has no outstanding bank transfer for this session (nothing to mark).`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  try {
+    await markPaid(session.id, targetName, links[interaction.user.id] || interaction.user.username);
+  } catch (err) {
+    return interaction.reply({ content: `⚠️ Failed to record payment: ${err.message}`, flags: MessageFlags.Ephemeral });
+  }
+
+  // Public confirmation in-thread, plus remaining unpaid count.
+  const payments = await getSessionPayments(session.id);
+  const paidSet = new Set(Object.keys(payments));
+  const remaining = unpaidDebtors(session, paidSet);
+  let msg = `✅ **${targetName}** marked as paid.`;
+  if (remaining.length > 0) {
+    msg += ` Still owing: ${remaining.map((r) => r.playerName).join(', ')}.`;
+  } else {
+    msg += ' 🎉 Everyone has paid!';
+  }
+  return interaction.reply({ content: msg });
+}
+
+// -------- Daily unpaid-debt reminder --------
+//
+// Each day at PAYMENT_REMINDER_HOUR in PAYMENT_REMINDER_TZ, scan every session
+// that still has unpaid debtors and post one reminder per thread, @mentioning
+// the linked Discord users (falling back to plain names when unmapped).
+
+async function runPaymentReminders() {
+  try {
+    const [sessions, links] = await Promise.all([trackerGet('/sessions'), getDiscordLinks()]);
+    // Invert links: playerName → discordUserId (first match wins).
+    const nameToUser = {};
+    for (const [uid, name] of Object.entries(links)) {
+      if (!(name in nameToUser)) nameToUser[name] = uid;
+    }
+
+    let remindedThreads = 0;
+    for (const session of sessions) {
+      const threadId = session.discordThreadId
+        || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
+      if (!threadId) continue;
+
+      const payments = await getSessionPayments(session.id);
+      const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
+      if (unpaid.length === 0) continue;
+
+      const thread = await client.channels.fetch(threadId).catch(() => null);
+      if (!thread) continue;
+
+      const mentions = [];
+      const lines = unpaid.map((u) => {
+        const uid = nameToUser[u.playerName];
+        const who = uid ? `<@${uid}>` : `**${u.playerName}**`;
+        if (uid) mentions.push(uid);
+        return `• ${who} — owes $${u.owes.toFixed(2)}`;
+      });
+      const content =
+        `⏰ **Payment reminder — ${session.date}**\n` +
+        `These players still owe the bank player:\n${lines.join('\n')}\n` +
+        `_Reply \`/paid\` once you've sent it._`;
+      await thread.send({ content, allowedMentions: { users: mentions } });
+      remindedThreads++;
+    }
+    console.log(`Payment reminders: pinged ${remindedThreads} thread(s).`);
+  } catch (err) {
+    console.error('runPaymentReminders failed:', err.message);
+  }
+}
+
+// Self-rescheduling daily timer (setTimeout, not setInterval, so DST shifts are
+// recomputed each day).
+function scheduleDailyReminders() {
+  const hour = Number(PAYMENT_REMINDER_HOUR);
+  const tz = PAYMENT_REMINDER_TZ;
+  const delay = msUntilNextLocalHour(new Date(), hour, tz);
+  console.log(`Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz}).`);
+  setTimeout(async () => {
+    await runPaymentReminders();
+    scheduleDailyReminders(); // reschedule for the following day
+  }, delay);
+}
+
 // -------- Discord event wiring --------
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() || interaction.commandName !== 'paid') return;
+  try {
+    await handlePaidCommand(interaction);
+  } catch (err) {
+    console.error('paid command error:', err);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+  }
 });
 
 client.on('messageCreate', async (msg) => {
@@ -750,6 +967,12 @@ client.on('messageCreate', async (msg) => {
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}.`);
+
+  // Register the /paid slash command and arm the daily reminder. Done before the
+  // startup scan (which can early-return) so neither is skipped.
+  await registerSlashCommands();
+  scheduleDailyReminders();
+
   // Catch-up scan: process every thread in the watched channel once on startup,
   // to recover threads created/posted while the bot was offline. Runs with the
   // 'scan' trigger, which imports a thread only if it was never imported before
