@@ -24,6 +24,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
+import { calculateSettlements } from './settlement.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +36,9 @@ const {
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-2.5-flash',
   BOT_HTTP_PORT = '6300',
+  // Optional: a Discord role ID to @mention on each results post, so everyone
+  // in the role gets pulled into the thread. Leave unset to disable mentions.
+  DISCORD_POKER_ROLE_ID = '',
 } = process.env;
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
@@ -589,6 +593,12 @@ function formatResultsMessage(session, results, bankAccounts) {
   const bankPlayer = winners[0]; // biggest winner
   const bankInfo = bankPlayer ? bankAccounts[bankPlayer.name] : null;
 
+  // Settlement rows (cash vs bank split), keyed by player name for lookup. This
+  // mirrors the Results page exactly, so e.g. a loser who paid partly in cash
+  // shows what's already covered on the table vs still owed via bank transfer.
+  const settlements = calculateSettlements(session);
+  const settleByName = new Map(settlements.map((s) => [s.playerName, s]));
+
   let msg = `🎲 **Session results — ${session.date}**\n`;
   msg += session.gameType === 'online' ? '🌐 _Online session_\n\n' : '🪑 _In-person session_\n\n';
 
@@ -614,7 +624,22 @@ function formatResultsMessage(session, results, bankAccounts) {
 
   if (losers.length > 0) {
     msg += `💸 **Losers** _(pay ${bankPlayer ? bankPlayer.name : 'the bank player'})_\n`;
-    for (const l of losers) msg += `• ${l.name}: ${formatMoney(l.profit)}\n`;
+    for (const l of losers) {
+      msg += `• ${l.name}: ${formatMoney(l.profit)}`;
+      // Annotate how the loss settles: cash already on the table vs bank transfer
+      // still owed. Only show when there's a meaningful cash component, so the
+      // common all-bank loser stays a clean one-liner.
+      const s = settleByName.get(l.name);
+      if (s && s.cashBuyIn > 0.005) {
+        const owed = s.bankOwed || 0;
+        if (owed > 0.005) {
+          msg += `  _(paid ${formatCash(s.cashBuyIn)} cash, owes ${formatCash(owed)} via bank)_`;
+        } else {
+          msg += `  _(paid in cash on the table)_`;
+        }
+      }
+      msg += '\n';
+    }
     msg += '\n';
   }
 
@@ -635,6 +660,11 @@ function formatResultsMessage(session, results, bankAccounts) {
   return msg;
 }
 
+// Plain dollar amount (no +/- sign), for cash/bank annotations.
+function formatCash(n) {
+  return `$${Math.abs(Number(n) || 0).toFixed(2)}`;
+}
+
 // Bank accounts live in the tracker DB. Fetch on demand so edits made in the
 // Manage Players UI take effect immediately. Returns {} on any failure, which
 // makes formatResultsMessage fall back to "no account on file".
@@ -651,7 +681,18 @@ async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
   const bankAccounts = await fetchBankAccounts();
   const text = formatResultsMessage(session, results, bankAccounts);
-  await thread.send(text);
+
+  // Mention the poker role (if configured) so everyone gets pulled into the
+  // thread. allowedMentions must explicitly list the role id or Discord
+  // suppresses the ping. When unset, send a plain message with no mentions.
+  if (DISCORD_POKER_ROLE_ID) {
+    await thread.send({
+      content: `<@&${DISCORD_POKER_ROLE_ID}>\n${text}`,
+      allowedMentions: { roles: [DISCORD_POKER_ROLE_ID] },
+    });
+  } else {
+    await thread.send({ content: text, allowedMentions: { parse: [] } });
+  }
 }
 
 // -------- Discord event wiring --------
