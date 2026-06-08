@@ -891,7 +891,11 @@ async function handlePaidCommand(interaction) {
 // not a corporate dunning notice. Variants are picked randomly each run so the
 // reminders don't go stale.
 
+// Mixed register — sarcastic taunts AND grovelling begging lines, in roughly
+// equal proportion. The random pick treats them as one bag, so a single
+// reminder may shame one debtor and beg the next.
 const TROLL_TAUNTS = [
+  // sarcastic / mean
   'are you too broke to pay this, need a loan?',
   "tap-to-pay isn't rocket science, even your nan can do it",
   'lost in transit between your couch cushions, was it?',
@@ -904,6 +908,19 @@ const TROLL_TAUNTS = [
   'three business days of dignity left, then we go nuclear',
   'send the money or we tell the group chat about that hand',
   'this is embarrassing for both of us, mostly you',
+  // begging / grovelling
+  'please big bro, we all know u got it 🥺',
+  'the greatest larper of them all, please spare us your chump change',
+  'begging on bended knee here, just a few taps and we square 🙏',
+  "i'm not above grovelling. please. it's been days.",
+  'your bank app is right there. one swipe. that\'s all we ask 🙏',
+  'i kiss your ring and ask only for what is owed 🥺',
+  'we know you good for it, please just do the thing',
+  'humbly requesting the funds, oh great one',
+  'i would walk through fire for this transfer, you only need to tap your phone',
+  'consider this a love letter, just with bank details attached',
+  'just a few coins for a weary traveller 🥺👉👈',
+  'big king energy demands big king payment, please bestow upon us',
 ];
 
 const BANK_BEGGAR_REASONS = [
