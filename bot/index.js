@@ -769,15 +769,21 @@ const PAID_COMMAND = new SlashCommandBuilder()
       .setRequired(false)
   );
 
+const UNPAID_COMMAND = new SlashCommandBuilder()
+  .setName('unpaid')
+  .setDescription('Show who still owes the bank player for this session.');
+
 async function registerSlashCommands() {
   if (!DISCORD_APP_ID) {
-    console.warn('DISCORD_APP_ID unset — skipping /paid slash command registration.');
+    console.warn('DISCORD_APP_ID unset — skipping slash command registration.');
     return;
   }
   try {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
-    await rest.put(Routes.applicationCommands(DISCORD_APP_ID), { body: [PAID_COMMAND.toJSON()] });
-    console.log('Registered /paid slash command.');
+    await rest.put(Routes.applicationCommands(DISCORD_APP_ID), {
+      body: [PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON()],
+    });
+    console.log('Registered /paid and /unpaid slash commands.');
   } catch (err) {
     console.error('Slash command registration failed:', err.message);
   }
@@ -879,6 +885,45 @@ async function handlePaidCommand(interaction) {
     msg += ' 🎉 Everyone has paid!';
   }
   return interaction.reply({ content: msg });
+}
+
+async function handleUnpaidCommand(interaction) {
+  // Must be used inside a session results thread.
+  const ch = interaction.channel;
+  const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
+  if (!isThread || ch.parentId !== DISCORD_CHANNEL_ID) {
+    return interaction.reply({ content: '⚠️ Use `/unpaid` inside a session results thread.', flags: MessageFlags.Ephemeral });
+  }
+
+  const session = await findSessionByThreadId(ch.id);
+  if (!session) {
+    return interaction.reply({ content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
+  }
+
+  const payments = await getSessionPayments(session.id);
+  const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
+  if (unpaid.length === 0) {
+    return interaction.reply({ content: `🎉 **${session.date}** — everyone has paid. Nothing outstanding.` });
+  }
+
+  // @mention linked users where we can; plain name otherwise.
+  const links = await getDiscordLinks();
+  const nameToUser = {};
+  for (const [uid, name] of Object.entries(links)) {
+    if (!(name in nameToUser)) nameToUser[name] = uid;
+  }
+  const mentions = [];
+  const lines = unpaid.map((u) => {
+    const uid = nameToUser[u.playerName];
+    if (uid) mentions.push(uid);
+    const who = uid ? `<@${uid}>` : `**${u.playerName}**`;
+    return `• ${who} — owes $${u.owes.toFixed(2)}`;
+  });
+  const total = unpaid.reduce((s, u) => s + u.owes, 0);
+  const content =
+    `💸 **Still unpaid — ${session.date}**\n${lines.join('\n')}\n` +
+    `_Total outstanding: $${total.toFixed(2)}. Run \`/paid\` once you've sent it._`;
+  return interaction.reply({ content, allowedMentions: { users: mentions } });
 }
 
 // -------- Daily unpaid-debt reminder --------
@@ -1039,11 +1084,14 @@ const client = new Client({
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'paid') return;
+  if (!interaction.isChatInputCommand()) return;
+  const handlers = { paid: handlePaidCommand, unpaid: handleUnpaidCommand };
+  const handler = handlers[interaction.commandName];
+  if (!handler) return;
   try {
-    await handlePaidCommand(interaction);
+    await handler(interaction);
   } catch (err) {
-    console.error('paid command error:', err);
+    console.error(`${interaction.commandName} command error:`, err);
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
