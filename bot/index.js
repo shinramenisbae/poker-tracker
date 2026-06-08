@@ -762,6 +762,11 @@ const PAID_COMMAND = new SlashCommandBuilder()
     o.setName('player')
       .setDescription("Player name (defaults to you). The bank player can mark anyone.")
       .setRequired(false)
+  )
+  .addUserOption((o) =>
+    o.setName('user')
+      .setDescription('Link this Discord user to the named player (requires player).')
+      .setRequired(false)
   );
 
 async function registerSlashCommands() {
@@ -809,6 +814,14 @@ async function handlePaidCommand(interaction) {
   const links = await getDiscordLinks();
   const requesterName = links[interaction.user.id];
   const named = interaction.options.getString('player');
+  const linkUser = interaction.options.getUser('user');
+
+  if (linkUser && !named) {
+    return interaction.reply({
+      content: '⚠️ `user:` requires `player:` — specify which player to link them to.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 
   // Determine the target player.
   let targetName;
@@ -829,15 +842,22 @@ async function handlePaidCommand(interaction) {
     targetName = requesterName;
   }
 
-  // First-time self-link: if an unknown user runs "/paid player:<name>", remember
-  // them as that player so future bare "/paid" works and reminders can @ them.
-  if (named && !requesterName) {
+  // Link the named Discord user → targetName (caller is linking someone else).
+  // Otherwise: first-time self-link when an unknown user runs "/paid player:<name>".
+  let linkNote = '';
+  if (linkUser) {
+    const prev = links[linkUser.id];
+    try { await linkDiscordUser(linkUser.id, targetName); } catch { /* non-fatal */ }
+    linkNote = prev && prev !== targetName
+      ? `🔗 Re-linked <@${linkUser.id}> from **${prev}** to **${targetName}**. `
+      : `🔗 Linked <@${linkUser.id}> to **${targetName}**. `;
+  } else if (named && !requesterName) {
     try { await linkDiscordUser(interaction.user.id, targetName); } catch { /* non-fatal */ }
   }
 
   if (!debtorNames.has(targetName)) {
     return interaction.reply({
-      content: `ℹ️ **${targetName}** has no outstanding bank transfer for this session (nothing to mark).`,
+      content: `${linkNote}ℹ️ **${targetName}** has no outstanding bank transfer for this session (nothing to mark).`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -852,7 +872,7 @@ async function handlePaidCommand(interaction) {
   const payments = await getSessionPayments(session.id);
   const paidSet = new Set(Object.keys(payments));
   const remaining = unpaidDebtors(session, paidSet);
-  let msg = `✅ **${targetName}** marked as paid.`;
+  let msg = `${linkNote}✅ **${targetName}** marked as paid.`;
   if (remaining.length > 0) {
     msg += ` Still owing: ${remaining.map((r) => r.playerName).join(', ')}.`;
   } else {
