@@ -106,6 +106,64 @@ server block, then `nginx -t && systemctl reload nginx`.
 
 ---
 
+## 7. Deploy recovery — when the GitHub auto-deploy fails
+
+The GitHub Actions "Deploy to VPS" step SSHes into the box. If a run shows
+**CI passed but Deploy failed** with something like
+`dial tcp 76.13.182.206:22: i/o timeout`, the merged code is on `main` but was
+never copied onto the VPS. Two parts: deploy it now (locally), then fix SSH so
+future merges auto-deploy.
+
+### 7a. Deploy the latest code now (no SSH-from-GitHub needed)
+
+```bash
+cd /root/.openclaw/workspace/poker-tracker
+git fetch origin main
+git checkout main
+git pull --ff-only
+git log --oneline -1            # confirm this matches the latest commit on GitHub
+bash deploy.sh                  # builds frontend, restarts backend
+# deploy.sh does NOT restart the bot; if bot/ changed, restart it:
+systemctl restart tribe-poker-bot.service
+systemctl is-active tribe-poker-backend.service tribe-poker-bot.service
+```
+
+Verify the newest feature is actually live (PR #11 — `/paid ... user:` linking):
+```bash
+grep -c "addUserOption" bot/index.js     # expect >= 1
+grep -c "getUser('user')" bot/index.js   # expect >= 1
+journalctl -u tribe-poker-bot.service -n 20 --no-pager
+```
+
+### 7b. Fix SSH so auto-deploy works again
+
+The timeout means the runner couldn't reach port 22. On the VPS:
+
+```bash
+systemctl is-active ssh                 # sshd running?
+ss -tlnp | grep ':22'                   # listening on 22?
+ufw status verbose                      # is 22/tcp allowed? (firewall is the #1 suspect
+                                        #  if it broke right after on-box changes)
+```
+
+If `ufw` is blocking inbound SSH, re-allow it:
+```bash
+ufw allow 22/tcp
+ufw reload
+```
+
+Also confirm the host/IP still matches the GitHub secret `VPS_HOST`
+(`76.13.182.206`) and that the provider firewall/security group (Hostinger panel)
+allows inbound 22. Once SSH is reachable again, re-run the failed deploy from the
+GitHub Actions page (Re-run jobs) or just push a new commit.
+
+> Tip: a quick external reachability check from any other machine —
+> `nc -vz 76.13.182.206 22` (or `ssh -v`). A timeout = blocked before reaching
+> sshd (firewall); "connection refused" = reached the host but sshd isn't
+> listening.
+
+---
+
 ## Daily usage reference (for players)
 
 - In a session results thread, run `/paid` once you've sent your money.
