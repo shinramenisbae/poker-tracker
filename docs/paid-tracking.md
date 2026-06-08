@@ -12,6 +12,10 @@ still owes at a configured time each day (default 10am NZ time).
     mark others). If you run it with your *own* name the first time, the bot
     **remembers** you (links your Discord user → that player) so future bare
     `/paid` works and reminders can @mention you.
+  - `/paid player:<name> user:@someone` links `@someone` to `<name>` **and**
+    marks the player paid in the same step. Useful for the bank player to set
+    up links on behalf of others. Re-linking is allowed; the reply notes the
+    previous link.
   - Only players who owe a **bank transfer** can be marked — pure cash-on-table
     losers have nothing to chase, mirroring the Results-page settlement.
   - The bot replies in-thread with who's marked and who's still outstanding.
