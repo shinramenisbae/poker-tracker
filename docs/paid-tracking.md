@@ -24,6 +24,17 @@ still owes at a configured time each day (default 10am NZ time).
   10:00 `Pacific/Auckland`): scans every session with unpaid debtors and posts
   one reminder per thread, @mentioning the linked Discord users (falling back to
   plain names when a player isn't linked yet). DST is handled automatically.
+  Copy is intentionally sarcastic / shitposty (random taunt per debtor + random
+  beggar-style line about the bank player) — it's a tribe poker chat, not a
+  collections agency.
+
+- **Manual trigger** (bot HTTP, loopback only):
+  ```
+  curl -sS -X POST http://127.0.0.1:6300/remind                # all sessions
+  curl -sS -X POST http://127.0.0.1:6300/remind/<sessionId>    # one session
+  ```
+  Returns `{ ok, reminded: [...ids], skipped: [{sessionId,reason}] }`. The
+  per-session form 404s if the id isn't found.
 
 ## State (backend tables)
 

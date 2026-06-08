@@ -24,7 +24,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
-import { calculateSettlements } from './settlement.js';
+import { calculateSettlements, identifyBankPlayer } from './settlement.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 
@@ -886,58 +886,132 @@ async function handlePaidCommand(interaction) {
 // Each day at PAYMENT_REMINDER_HOUR in PAYMENT_REMINDER_TZ, scan every session
 // that still has unpaid debtors and post one reminder per thread, @mentioning
 // the linked Discord users (falling back to plain names when unmapped).
+//
+// The copy is intentionally sarcastic / shitposty — it's a tribe poker group,
+// not a corporate dunning notice. Variants are picked randomly each run so the
+// reminders don't go stale.
 
-async function runPaymentReminders() {
-  try {
-    const [sessions, links] = await Promise.all([trackerGet('/sessions'), getDiscordLinks()]);
-    // Invert links: playerName → discordUserId (first match wins).
-    const nameToUser = {};
-    for (const [uid, name] of Object.entries(links)) {
-      if (!(name in nameToUser)) nameToUser[name] = uid;
-    }
+const TROLL_TAUNTS = [
+  'are you too broke to pay this, need a loan?',
+  "tap-to-pay isn't rocket science, even your nan can do it",
+  'lost in transit between your couch cushions, was it?',
+  'we have screenshots. and patience. but not forever.',
+  "pretending you forgot? we don't have amnesia.",
+  'the longer you wait, the funnier the next reminder gets',
+  "I'd accept apology in the form of an instant transfer",
+  'skill issue at the felt AND at internet banking? rough',
+  'your credit score is watching this thread, just so you know',
+  'three business days of dignity left, then we go nuclear',
+  'send the money or we tell the group chat about that hand',
+  'this is embarrassing for both of us, mostly you',
+];
 
-    let remindedThreads = 0;
-    for (const session of sessions) {
-      const threadId = session.discordThreadId
-        || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
-      if (!threadId) continue;
+const BANK_BEGGAR_REASONS = [
+  'really needs this for an emergency penis-enlargement consult 🥺',
+  'is one bowl of two-minute noodles away from bankruptcy',
+  "has rent due tomorrow and the landlord doesn't accept poker chips",
+  'is saving for a hair transplant and every dollar counts',
+  'needs to refill the vape supply before withdrawals kick in',
+  'has a parking fine he can\'t afford because of YOU specifically',
+  'started a GoFundMe — first donor gets a thank-you note',
+  'is using this thread as collateral for his next loan',
+  'owns three investment properties and is still mad about this $',
+  'has a goldfish in critical condition, vet bills are insane',
+  'is one missed transfer away from selling plasma',
+  "wife threatened to leave if rent's late again",
+];
 
-      const payments = await getSessionPayments(session.id);
-      const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
-      if (unpaid.length === 0) continue;
+const FOOTER_SNARKS = [
+  "_Reply `/paid` once you've sent it. or don't, we love drama._",
+  "_Hit `/paid` after the transfer. it's 5 seconds, what's your excuse?_",
+  '_Use `/paid` when the funds clear. failure to comply triggers more memes._',
+  '_Smash `/paid` when done. silence will be interpreted as guilt._',
+  '_`/paid` when sent. the reminder gets meaner each day, fyi._',
+];
 
-      const thread = await client.channels.fetch(threadId).catch(() => null);
-      if (!thread) continue;
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
-      const mentions = [];
-      const lines = unpaid.map((u) => {
-        const uid = nameToUser[u.playerName];
-        const who = uid ? `<@${uid}>` : `**${u.playerName}**`;
-        if (uid) mentions.push(uid);
-        return `• ${who} — owes $${u.owes.toFixed(2)}`;
-      });
-      const content =
-        `⏰ **Payment reminder — ${session.date}**\n` +
-        `These players still owe the bank player:\n${lines.join('\n')}\n` +
-        `_Reply \`/paid\` once you've sent it._`;
-      await thread.send({ content, allowedMentions: { users: mentions } });
-      remindedThreads++;
-    }
-    console.log(`Payment reminders: pinged ${remindedThreads} thread(s).`);
-  } catch (err) {
-    console.error('runPaymentReminders failed:', err.message);
+function buildReminderMessage({ session, unpaidLines, bankMention }) {
+  const reason = pickRandom(BANK_BEGGAR_REASONS);
+  const footer = pickRandom(FOOTER_SNARKS);
+  return (
+    `⏰ **Payment reminder — ${session.date}**\n` +
+    `${unpaidLines.join('\n')}\n` +
+    `\n🏦 ${bankMention} ${reason}\n` +
+    `\n${footer}`
+  );
+}
+
+// Posts reminders for sessions with unpaid debtors. If sessionId is given, only
+// that session is processed (and a missing session id throws). Always throws on
+// failure so HTTP callers can surface errors; the daily timer wraps + swallows.
+async function runPaymentReminders({ sessionId = null } = {}) {
+  const [allSessions, links] = await Promise.all([
+    trackerGet('/sessions'),
+    getDiscordLinks(),
+  ]);
+  const sessions = sessionId ? allSessions.filter((s) => s.id === sessionId) : allSessions;
+  if (sessionId && sessions.length === 0) {
+    throw new Error(`Session ${sessionId} not found`);
   }
+
+  // Invert links: playerName → discordUserId (first match wins).
+  const nameToUser = {};
+  for (const [uid, name] of Object.entries(links)) {
+    if (!(name in nameToUser)) nameToUser[name] = uid;
+  }
+
+  const reminded = [];
+  const skipped = [];
+  for (const session of sessions) {
+    const threadId = session.discordThreadId
+      || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
+    if (!threadId) { skipped.push({ sessionId: session.id, reason: 'no thread' }); continue; }
+
+    const payments = await getSessionPayments(session.id);
+    const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
+    if (unpaid.length === 0) { skipped.push({ sessionId: session.id, reason: 'no unpaid' }); continue; }
+
+    const thread = await client.channels.fetch(threadId).catch(() => null);
+    if (!thread) { skipped.push({ sessionId: session.id, reason: 'thread fetch failed' }); continue; }
+
+    const mentions = [];
+    const unpaidLines = unpaid.map((u) => {
+      const uid = nameToUser[u.playerName];
+      const who = uid ? `<@${uid}>` : `**${u.playerName}**`;
+      if (uid) mentions.push(uid);
+      return `• ${who} — owes $${u.owes.toFixed(2)}. ${pickRandom(TROLL_TAUNTS)}`;
+    });
+
+    // Bank player → mention if linked, otherwise bold name.
+    const bankId = session.bankPlayerId || identifyBankPlayer(session);
+    const bankPlayer = (session.players || []).find((p) => p.id === bankId);
+    const bankName = bankPlayer ? bankPlayer.name : 'the bank player';
+    const bankUid = nameToUser[bankName];
+    if (bankUid) mentions.push(bankUid);
+    const bankMention = bankUid ? `<@${bankUid}>` : `**${bankName}**`;
+
+    const content = buildReminderMessage({ session, unpaidLines, bankMention });
+    await thread.send({ content, allowedMentions: { users: mentions } });
+    reminded.push(session.id);
+  }
+  console.log(`Payment reminders: pinged ${reminded.length} thread(s)${sessionId ? ` (session ${sessionId})` : ''}.`);
+  return { reminded, skipped };
 }
 
 // Self-rescheduling daily timer (setTimeout, not setInterval, so DST shifts are
-// recomputed each day).
+// recomputed each day). Swallows errors so a transient failure doesn't kill the
+// loop — the next day still runs.
 function scheduleDailyReminders() {
   const hour = Number(PAYMENT_REMINDER_HOUR);
   const tz = PAYMENT_REMINDER_TZ;
   const delay = msUntilNextLocalHour(new Date(), hour, tz);
   console.log(`Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz}).`);
   setTimeout(async () => {
-    await runPaymentReminders();
+    try { await runPaymentReminders(); }
+    catch (err) { console.error('Daily payment reminder failed:', err.message); }
     scheduleDailyReminders(); // reschedule for the following day
   }, delay);
 }
@@ -1120,6 +1194,32 @@ app.post('/repost/:sessionId', async (req, res) => {
   } catch (err) {
     console.error('repost error:', err);
     res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Manually trigger the unpaid-debt reminder for every session that still has
+// outstanding bank transfers. Same content as the daily 10:00 NZ job.
+app.post('/remind', async (req, res) => {
+  try {
+    const result = await runPaymentReminders();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('remind error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Manually trigger the reminder for one specific session. 404 if the session id
+// isn't found; otherwise the response notes whether the thread was actually
+// pinged (e.g. skipped:no unpaid means everyone's already settled).
+app.post('/remind/:sessionId', async (req, res) => {
+  try {
+    const result = await runPaymentReminders({ sessionId: req.params.sessionId });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('remind/:sessionId error:', err);
+    const status = /not found/i.test(err.message) ? 404 : 500;
+    res.status(status).json({ error: err.message || String(err) });
   }
 });
 
