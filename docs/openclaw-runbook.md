@@ -60,7 +60,7 @@ journalctl -u tribe-poker-bot.service -n 30 --no-pager
 ```
 
 Expect log lines:
-- `Registered /paid slash command.`
+- `Registered /paid and /unpaid slash commands.`
 - `Next payment reminder in N.Nh (10:00 Pacific/Auckland).`
 
 Global slash commands can take a few minutes to first appear in Discord.

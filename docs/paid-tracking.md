@@ -20,6 +20,11 @@ still owes at a configured time each day (default 10am NZ time).
     losers have nothing to chase, mirroring the Results-page settlement.
   - The bot replies in-thread with who's marked and who's still outstanding.
 
+- **`/unpaid`** (slash command, used inside a session results thread): lists who
+  still owes the bank player for that session, with the amount each owes and the
+  total outstanding. @mentions linked users; falls back to plain names. Replies
+  "everyone has paid" when nothing is outstanding. Read-only — changes nothing.
+
 - **Daily reminder** (`PAYMENT_REMINDER_HOUR` in `PAYMENT_REMINDER_TZ`, default
   10:00 `Pacific/Auckland`): scans every session with unpaid debtors and posts
   one reminder per thread, @mentioning the linked Discord users (falling back to
