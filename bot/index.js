@@ -572,7 +572,10 @@ async function processThreadUnlocked(thread, trigger) {
   const players = aggregatedRows.map((r) => ({
     id: randomUUID(),
     name: r.name,
-    paymentMethod: 'cash',
+    // Online sessions settle entirely by bank transfer — there is no physical
+    // cash on a table. Tagging these as 'cash' made the settlement treat each
+    // loser's loss as already-collected cash, so they showed as owing nothing.
+    paymentMethod: 'bank',
     cashOut: { amount: (Number(r.buyOut) || 0) + (Number(r.stack) || 0), timestamp: sessionTimestamp },
   }));
   const created = await trackerPost('/sessions', {
@@ -587,7 +590,7 @@ async function processThreadUnlocked(thread, trigger) {
     const buyIn = Number(aggregatedRows[i].buyIn) || 0;
     if (buyIn <= 0) continue;
     await trackerPost(`/sessions/${created.id}/players/${players[i].id}/buyins`, {
-      amount: buyIn, method: 'cash', isRebuy: false,
+      amount: buyIn, method: 'bank', isRebuy: false,
     });
   }
 
