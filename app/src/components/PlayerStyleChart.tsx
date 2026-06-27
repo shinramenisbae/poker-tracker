@@ -3,6 +3,7 @@ import {
   ScatterChart, Scatter, XAxis, YAxis, Tooltip,
   ReferenceLine, ResponsiveContainer,
 } from 'recharts';
+import type { ScatterShapeProps } from 'recharts';
 import type { PlayerStyleStats } from '../api';
 
 interface Props {
@@ -10,6 +11,16 @@ interface Props {
   minHands?: number; // qualifying threshold for the group medians + axis range
   title?: string;
   subtitle?: string;
+}
+
+interface ChartPoint {
+  name: string;
+  vpip: number;
+  pfr: number;
+  hands: number;
+  af: number | null;
+  sessions: number | undefined;
+  faded: boolean;
 }
 
 function median(nums: number[]): number {
@@ -110,7 +121,7 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
             cursor={false}
             content={({ payload }) => {
               if (!payload || payload.length === 0) return null;
-              const p: any = payload[0].payload;
+              const p = payload[0].payload as ChartPoint;
               const style = styleLabel(p.vpip, p.pfr, vpipMid, pfrMid);
               return (
                 <div className="bg-bg-primary border border-bg-tertiary rounded p-2 text-xs">
@@ -130,10 +141,11 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
 
           <Scatter
             data={points}
-            shape={(props: any) => {
+            shape={(props: ScatterShapeProps) => {
               const { cx, cy, payload } = props;
               if (cx == null || cy == null) return null;
-              const faded = payload.faded;
+              const pt = payload as ChartPoint | undefined;
+              const faded = pt?.faded ?? false;
               return (
                 <g>
                   <circle
@@ -149,7 +161,7 @@ export function PlayerStyleChart({ data, minHands = 50, title, subtitle }: Props
                     fontWeight={faded ? 400 : 600}
                     style={{ pointerEvents: 'none' }}
                   >
-                    {payload.name}
+                    {pt?.name}
                   </text>
                 </g>
               );
