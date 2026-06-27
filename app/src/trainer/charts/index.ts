@@ -56,7 +56,7 @@ export function availableScenarios(category: Category): ScenarioRef[] {
       const [pos, depthStr] = key.split('-');
       const hero = parsePosition(pos);
       const depth = Number(depthStr);
-      if (hero && PUSH_FOLD_DEPTHS.includes(depth as any)) {
+      if (hero && (PUSH_FOLD_DEPTHS as readonly number[]).includes(depth)) {
         out.push({ hero, depth, source: 'push/fold (GTO-style)' });
       }
     }

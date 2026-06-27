@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { RANKS, allHandClasses, handClassOf, comboCountOf, randomCombo, expandNotation, gridIndex } from './ranges';
-import type { Card } from './types';
+import { allHandClasses, handClassOf, comboCountOf, randomCombo, expandNotation, gridIndex } from './ranges';
+import type { Card, Rank, Suit } from './types';
 
-const c = (s: string): Card => ({ rank: s[0] as any, suit: s[1] as any });
+const c = (s: string): Card => ({ rank: s[0] as Rank, suit: s[1] as Suit });
 
 describe('ranges', () => {
   it('enumerates 169 unique classes', () => {
