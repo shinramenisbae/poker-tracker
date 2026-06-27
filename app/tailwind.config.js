@@ -59,6 +59,9 @@ export default {
         'button': '56px',
         'list-item': '60px',
       },
+      gridTemplateColumns: {
+        '13': 'repeat(13, minmax(0, 1fr))',
+      },
     },
   },
   plugins: [],
