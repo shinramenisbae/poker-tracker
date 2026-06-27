@@ -51,6 +51,13 @@ export function Home() {
             Tribe Poker Tracker
           </h1>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => navigate('/trainer')}
+              className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
+              title="GTO Trainer"
+            >
+              🎯
+            </button>
             {sessions.length > 0 && (
               <button
                 onClick={() => navigate('/stats')}
