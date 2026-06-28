@@ -84,10 +84,17 @@ function computeHandEv(hand, opts = {}) {
   const actualNet = actualNetByPlayer(hand, contrib);
 
   // Eligibility:
-  // - at least 2 all-in players
-  // - all those all-in players have shown hole cards
-  // - the board at the time of the LATEST (= deepest street) all-in is < 5 cards
-  if (hand.allInPlayers.length < 2) return null;
+  // - at least 1 *declared* all-in (PokerNow only tags "...and go all in" when
+  //   that action puts the player's whole stack in; a bigger stack that CALLS
+  //   the shove keeps chips behind and is logged as a plain "calls X", so it is
+  //   NOT in allInPlayers). The common shove-and-cover race therefore has just
+  //   one declared all-in — requiring 2 here silently dropped those hands. The
+  //   `showdownCommitted >= 2` check below is what actually guarantees a real
+  //   two-way all-in showdown.
+  // - every declared all-in player showed hole cards
+  // - the board at the time of the all-in is < 5 cards (else no card to come,
+  //   so actual == expected — no variance to chart)
+  if (hand.allInPlayers.length < 1) return null;
 
   // "Showdown committed" = anyone who reached showdown without folding.
   // That includes players who CALLED an all-in (they're committed even though

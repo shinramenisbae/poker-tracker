@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly poker tracker DB backup
+
+[Timer]
+# 04:00 server time daily. Persistent=true runs a missed backup on next boot
+# (e.g. if the VPS was off at 04:00).
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

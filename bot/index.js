@@ -19,11 +19,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration } from 'discord.js';
+import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
+import { calculateSettlements, identifyBankPlayer } from './settlement.js';
+import { unpaidDebtors } from './unpaid.js';
+import { msUntilNextLocalHour } from './schedule.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,6 +38,15 @@ const {
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-2.5-flash',
   BOT_HTTP_PORT = '6300',
+  // Optional: a Discord role ID to @mention on each results post, so everyone
+  // in the role gets pulled into the thread. Leave unset to disable mentions.
+  DISCORD_POKER_ROLE_ID = '',
+  // Discord application (client) id — required to register the /paid slash
+  // command. Found in the Developer Portal; same as the bot user id.
+  DISCORD_APP_ID = '',
+  // Hour (0-23) and timezone for the daily unpaid-debt reminder.
+  PAYMENT_REMINDER_HOUR = '10',
+  PAYMENT_REMINDER_TZ = 'Pacific/Auckland',
 } = process.env;
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
@@ -126,6 +138,30 @@ async function trackerPut(path, body) {
   });
   if (!res.ok) throw new Error(`PUT ${path} → ${res.status}: ${await res.text()}`);
   return res.json();
+}
+async function trackerDelete(path) {
+  const res = await fetch(`${TRACKER_API_BASE}${path}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// -------- Discord links + payment state (via tracker API) --------
+async function getDiscordLinks() {
+  try { return (await trackerGet('/discord-links')).links || {}; }
+  catch (err) { console.error('getDiscordLinks failed:', err.message); return {}; }
+}
+async function linkDiscordUser(discordUserId, playerName) {
+  return trackerPut(`/discord-links/${encodeURIComponent(discordUserId)}`, { playerName });
+}
+async function getSessionPayments(sessionId) {
+  try { return (await trackerGet(`/sessions/${sessionId}/payments`)).paid || {}; }
+  catch (err) { console.error('getSessionPayments failed:', err.message); return {}; }
+}
+async function markPaid(sessionId, playerName, paidBy) {
+  return trackerPut(`/sessions/${sessionId}/payments/${encodeURIComponent(playerName)}`, { paidBy });
+}
+async function markUnpaid(sessionId, playerName) {
+  return trackerDelete(`/sessions/${sessionId}/payments/${encodeURIComponent(playerName)}`);
 }
 
 // Gemini OCR is non-deterministic on aliases with weird whitespace/emoji.
@@ -536,7 +572,10 @@ async function processThreadUnlocked(thread, trigger) {
   const players = aggregatedRows.map((r) => ({
     id: randomUUID(),
     name: r.name,
-    paymentMethod: 'cash',
+    // Online sessions settle entirely by bank transfer — there is no physical
+    // cash on a table. Tagging these as 'cash' made the settlement treat each
+    // loser's loss as already-collected cash, so they showed as owing nothing.
+    paymentMethod: 'bank',
     cashOut: { amount: (Number(r.buyOut) || 0) + (Number(r.stack) || 0), timestamp: sessionTimestamp },
   }));
   const created = await trackerPost('/sessions', {
@@ -551,7 +590,7 @@ async function processThreadUnlocked(thread, trigger) {
     const buyIn = Number(aggregatedRows[i].buyIn) || 0;
     if (buyIn <= 0) continue;
     await trackerPost(`/sessions/${created.id}/players/${players[i].id}/buyins`, {
-      amount: buyIn, method: 'cash', isRebuy: false,
+      amount: buyIn, method: 'bank', isRebuy: false,
     });
   }
 
@@ -589,6 +628,12 @@ function formatResultsMessage(session, results, bankAccounts) {
   const bankPlayer = winners[0]; // biggest winner
   const bankInfo = bankPlayer ? bankAccounts[bankPlayer.name] : null;
 
+  // Settlement rows (cash vs bank split), keyed by player name for lookup. This
+  // mirrors the Results page exactly, so e.g. a loser who paid partly in cash
+  // shows what's already covered on the table vs still owed via bank transfer.
+  const settlements = calculateSettlements(session);
+  const settleByName = new Map(settlements.map((s) => [s.playerName, s]));
+
   let msg = `🎲 **Session results — ${session.date}**\n`;
   msg += session.gameType === 'online' ? '🌐 _Online session_\n\n' : '🪑 _In-person session_\n\n';
 
@@ -614,7 +659,22 @@ function formatResultsMessage(session, results, bankAccounts) {
 
   if (losers.length > 0) {
     msg += `💸 **Losers** _(pay ${bankPlayer ? bankPlayer.name : 'the bank player'})_\n`;
-    for (const l of losers) msg += `• ${l.name}: ${formatMoney(l.profit)}\n`;
+    for (const l of losers) {
+      msg += `• ${l.name}: ${formatMoney(l.profit)}`;
+      // Annotate how the loss settles: cash already on the table vs bank transfer
+      // still owed. Only show when there's a meaningful cash component, so the
+      // common all-bank loser stays a clean one-liner.
+      const s = settleByName.get(l.name);
+      if (s && s.cashBuyIn > 0.005) {
+        const owed = s.bankOwed || 0;
+        if (owed > 0.005) {
+          msg += `  _(paid ${formatCash(s.cashBuyIn)} cash, owes ${formatCash(owed)} via bank)_`;
+        } else {
+          msg += `  _(paid in cash on the table)_`;
+        }
+      }
+      msg += '\n';
+    }
     msg += '\n';
   }
 
@@ -635,6 +695,11 @@ function formatResultsMessage(session, results, bankAccounts) {
   return msg;
 }
 
+// Plain dollar amount (no +/- sign), for cash/bank annotations.
+function formatCash(n) {
+  return `$${Math.abs(Number(n) || 0).toFixed(2)}`;
+}
+
 // Bank accounts live in the tracker DB. Fetch on demand so edits made in the
 // Manage Players UI take effect immediately. Returns {} on any failure, which
 // makes formatResultsMessage fall back to "no account on file".
@@ -647,16 +712,393 @@ async function fetchBankAccounts() {
   }
 }
 
+// Delete the bot's own prior results posts in a thread (those starting with the
+// 🎲 results marker). Returns how many were deleted. Used by /repost?clean=true
+// so refreshing a session's results doesn't leave stale duplicate posts behind.
+// Paginates fully so an older post beyond the first page is still removed.
+async function deletePriorResultsPosts(thread, botUserId) {
+  let deleted = 0;
+  let before;
+  while (true) {
+    const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (batch.size === 0) break;
+    for (const msg of batch.values()) {
+      if (msg.author?.id === botUserId && (msg.content || '').startsWith('🎲')) {
+        try { await msg.delete(); deleted++; }
+        catch (err) { console.error(`Could not delete message ${msg.id}:`, err.message); }
+      }
+    }
+    if (batch.size < 100) break;
+    before = batch.last().id;
+  }
+  return deleted;
+}
+
 async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
   const bankAccounts = await fetchBankAccounts();
   const text = formatResultsMessage(session, results, bankAccounts);
-  await thread.send(text);
+
+  // Mention the poker role (if configured) so everyone gets pulled into the
+  // thread. allowedMentions must explicitly list the role id or Discord
+  // suppresses the ping. When unset, send a plain message with no mentions.
+  if (DISCORD_POKER_ROLE_ID) {
+    await thread.send({
+      content: `<@&${DISCORD_POKER_ROLE_ID}>\n${text}`,
+      allowedMentions: { roles: [DISCORD_POKER_ROLE_ID] },
+    });
+  } else {
+    await thread.send({ content: text, allowedMentions: { parse: [] } });
+  }
+}
+
+// -------- /paid slash command --------
+//
+// Resolves which session thread the command was used in, maps the Discord user
+// to a canonical player (or uses the named target), and marks them paid for
+// that session. First-time users are auto-linked to the player name they claim.
+
+const PAID_COMMAND = new SlashCommandBuilder()
+  .setName('paid')
+  .setDescription('Mark a player as having paid their debt for this session.')
+  .addStringOption((o) =>
+    o.setName('player')
+      .setDescription("Player name (defaults to you). The bank player can mark anyone.")
+      .setRequired(false)
+  )
+  .addUserOption((o) =>
+    o.setName('user')
+      .setDescription('Link this Discord user to the named player (requires player).')
+      .setRequired(false)
+  );
+
+const UNPAID_COMMAND = new SlashCommandBuilder()
+  .setName('unpaid')
+  .setDescription('Show who still owes the bank player for this session.');
+
+async function registerSlashCommands() {
+  if (!DISCORD_APP_ID) {
+    console.warn('DISCORD_APP_ID unset — skipping slash command registration.');
+    return;
+  }
+  try {
+    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
+    await rest.put(Routes.applicationCommands(DISCORD_APP_ID), {
+      body: [PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON()],
+    });
+    console.log('Registered /paid and /unpaid slash commands.');
+  } catch (err) {
+    console.error('Slash command registration failed:', err.message);
+  }
+}
+
+// Find the session linked to a given thread id (column first, notes fallback).
+async function findSessionByThreadId(threadId) {
+  const sessions = await trackerGet('/sessions');
+  return sessions.find((s) =>
+    s.discordThreadId === threadId || (s.notes || '').includes(`threadId=${threadId}`)
+  );
+}
+
+async function handlePaidCommand(interaction) {
+  // Must be used inside a session results thread.
+  const ch = interaction.channel;
+  const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
+  if (!isThread || ch.parentId !== DISCORD_CHANNEL_ID) {
+    return interaction.reply({ content: '⚠️ Use `/paid` inside a session results thread.', flags: MessageFlags.Ephemeral });
+  }
+
+  const session = await findSessionByThreadId(ch.id);
+  if (!session) {
+    return interaction.reply({ content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
+  }
+
+  const settlements = calculateSettlements(session);
+  // Debtors = players who owe a bank transfer.
+  const debtorNames = new Set(
+    settlements.filter((s) => (s.bankOwed || 0) > 0.005).map((s) => s.playerName)
+  );
+  const allNames = settlements.map((s) => s.playerName);
+
+  const links = await getDiscordLinks();
+  const requesterName = links[interaction.user.id];
+  const named = interaction.options.getString('player');
+  const linkUser = interaction.options.getUser('user');
+
+  if (linkUser && !named) {
+    return interaction.reply({
+      content: '⚠️ `user:` requires `player:` — specify which player to link them to.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  // Determine the target player.
+  let targetName;
+  if (named) {
+    // Resolve a named target case-insensitively against this session's players.
+    targetName = allNames.find((n) => n.toLowerCase() === named.trim().toLowerCase());
+    if (!targetName) {
+      return interaction.reply({ content: `⚠️ No player named **${named}** in this session.`, flags: MessageFlags.Ephemeral });
+    }
+  } else {
+    // No name → the requester marks themselves. Requires a known link.
+    if (!requesterName) {
+      return interaction.reply({
+        content: '⚠️ I don’t know who you are yet. Run `/paid player:<your name>` once and I’ll remember you.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+    targetName = requesterName;
+  }
+
+  // Link the named Discord user → targetName (caller is linking someone else).
+  // Otherwise: first-time self-link when an unknown user runs "/paid player:<name>".
+  let linkNote = '';
+  if (linkUser) {
+    const prev = links[linkUser.id];
+    try { await linkDiscordUser(linkUser.id, targetName); } catch { /* non-fatal */ }
+    linkNote = prev && prev !== targetName
+      ? `🔗 Re-linked <@${linkUser.id}> from **${prev}** to **${targetName}**. `
+      : `🔗 Linked <@${linkUser.id}> to **${targetName}**. `;
+  } else if (named && !requesterName) {
+    try { await linkDiscordUser(interaction.user.id, targetName); } catch { /* non-fatal */ }
+  }
+
+  if (!debtorNames.has(targetName)) {
+    return interaction.reply({
+      content: `${linkNote}ℹ️ **${targetName}** has no outstanding bank transfer for this session (nothing to mark).`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  try {
+    await markPaid(session.id, targetName, links[interaction.user.id] || interaction.user.username);
+  } catch (err) {
+    return interaction.reply({ content: `⚠️ Failed to record payment: ${err.message}`, flags: MessageFlags.Ephemeral });
+  }
+
+  // Public confirmation in-thread, plus remaining unpaid count.
+  const payments = await getSessionPayments(session.id);
+  const paidSet = new Set(Object.keys(payments));
+  const remaining = unpaidDebtors(session, paidSet);
+  let msg = `${linkNote}✅ **${targetName}** marked as paid.`;
+  if (remaining.length > 0) {
+    msg += ` Still owing: ${remaining.map((r) => r.playerName).join(', ')}.`;
+  } else {
+    msg += ' 🎉 Everyone has paid!';
+  }
+  return interaction.reply({ content: msg });
+}
+
+async function handleUnpaidCommand(interaction) {
+  // Must be used inside a session results thread.
+  const ch = interaction.channel;
+  const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
+  if (!isThread || ch.parentId !== DISCORD_CHANNEL_ID) {
+    return interaction.reply({ content: '⚠️ Use `/unpaid` inside a session results thread.', flags: MessageFlags.Ephemeral });
+  }
+
+  const session = await findSessionByThreadId(ch.id);
+  if (!session) {
+    return interaction.reply({ content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
+  }
+
+  const payments = await getSessionPayments(session.id);
+  const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
+  if (unpaid.length === 0) {
+    return interaction.reply({ content: `🎉 **${session.date}** — everyone has paid. Nothing outstanding.` });
+  }
+
+  // @mention linked users where we can; plain name otherwise.
+  const links = await getDiscordLinks();
+  const nameToUser = {};
+  for (const [uid, name] of Object.entries(links)) {
+    if (!(name in nameToUser)) nameToUser[name] = uid;
+  }
+  const mentions = [];
+  const lines = unpaid.map((u) => {
+    const uid = nameToUser[u.playerName];
+    if (uid) mentions.push(uid);
+    const who = uid ? `<@${uid}>` : `**${u.playerName}**`;
+    return `• ${who} — owes $${u.owes.toFixed(2)}`;
+  });
+  const total = unpaid.reduce((s, u) => s + u.owes, 0);
+  const content =
+    `💸 **Still unpaid — ${session.date}**\n${lines.join('\n')}\n` +
+    `_Total outstanding: $${total.toFixed(2)}. Run \`/paid\` once you've sent it._`;
+  return interaction.reply({ content, allowedMentions: { users: mentions } });
+}
+
+// -------- Daily unpaid-debt reminder --------
+//
+// Each day at PAYMENT_REMINDER_HOUR in PAYMENT_REMINDER_TZ, scan every session
+// that still has unpaid debtors and post one reminder per thread, @mentioning
+// the linked Discord users (falling back to plain names when unmapped).
+//
+// The copy is intentionally sarcastic / shitposty — it's a tribe poker group,
+// not a corporate dunning notice. Variants are picked randomly each run so the
+// reminders don't go stale.
+
+// Mixed register — sarcastic taunts AND grovelling begging lines, in roughly
+// equal proportion. The random pick treats them as one bag, so a single
+// reminder may shame one debtor and beg the next.
+const TROLL_TAUNTS = [
+  // sarcastic / mean
+  'are you too broke to pay this, need a loan?',
+  "tap-to-pay isn't rocket science, even your nan can do it",
+  'lost in transit between your couch cushions, was it?',
+  'we have screenshots. and patience. but not forever.',
+  "pretending you forgot? we don't have amnesia.",
+  'the longer you wait, the funnier the next reminder gets',
+  "I'd accept apology in the form of an instant transfer",
+  'skill issue at the felt AND at internet banking? rough',
+  'your credit score is watching this thread, just so you know',
+  'three business days of dignity left, then we go nuclear',
+  'send the money or we tell the group chat about that hand',
+  'this is embarrassing for both of us, mostly you',
+  // begging / grovelling
+  'please big bro, we all know u got it 🥺',
+  'the greatest larper of them all, please spare us your chump change',
+  'begging on bended knee here, just a few taps and we square 🙏',
+  "i'm not above grovelling. please. it's been days.",
+  'your bank app is right there. one swipe. that\'s all we ask 🙏',
+  'i kiss your ring and ask only for what is owed 🥺',
+  'we know you good for it, please just do the thing',
+  'humbly requesting the funds, oh great one',
+  'i would walk through fire for this transfer, you only need to tap your phone',
+  'consider this a love letter, just with bank details attached',
+  'just a few coins for a weary traveller 🥺👉👈',
+  'big king energy demands big king payment, please bestow upon us',
+];
+
+const BANK_BEGGAR_REASONS = [
+  'really needs this for an emergency penis-enlargement consult 🥺',
+  'is one bowl of two-minute noodles away from bankruptcy',
+  "has rent due tomorrow and the landlord doesn't accept poker chips",
+  'is saving for a hair transplant and every dollar counts',
+  'needs to refill the vape supply before withdrawals kick in',
+  'has a parking fine he can\'t afford because of YOU specifically',
+  'started a GoFundMe — first donor gets a thank-you note',
+  'is using this thread as collateral for his next loan',
+  'owns three investment properties and is still mad about this $',
+  'has a goldfish in critical condition, vet bills are insane',
+  'is one missed transfer away from selling plasma',
+  "wife threatened to leave if rent's late again",
+];
+
+const FOOTER_SNARKS = [
+  "_Reply `/paid` once you've sent it. or don't, we love drama._",
+  "_Hit `/paid` after the transfer. it's 5 seconds, what's your excuse?_",
+  '_Use `/paid` when the funds clear. failure to comply triggers more memes._',
+  '_Smash `/paid` when done. silence will be interpreted as guilt._',
+  '_`/paid` when sent. the reminder gets meaner each day, fyi._',
+];
+
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function buildReminderMessage({ session, unpaidLines, bankMention }) {
+  const reason = pickRandom(BANK_BEGGAR_REASONS);
+  const footer = pickRandom(FOOTER_SNARKS);
+  return (
+    `⏰ **Payment reminder — ${session.date}**\n` +
+    `${unpaidLines.join('\n')}\n` +
+    `\n🏦 ${bankMention} ${reason}\n` +
+    `\n${footer}`
+  );
+}
+
+// Posts reminders for sessions with unpaid debtors. If sessionId is given, only
+// that session is processed (and a missing session id throws). Always throws on
+// failure so HTTP callers can surface errors; the daily timer wraps + swallows.
+async function runPaymentReminders({ sessionId = null } = {}) {
+  const [allSessions, links] = await Promise.all([
+    trackerGet('/sessions'),
+    getDiscordLinks(),
+  ]);
+  const sessions = sessionId ? allSessions.filter((s) => s.id === sessionId) : allSessions;
+  if (sessionId && sessions.length === 0) {
+    throw new Error(`Session ${sessionId} not found`);
+  }
+
+  // Invert links: playerName → discordUserId (first match wins).
+  const nameToUser = {};
+  for (const [uid, name] of Object.entries(links)) {
+    if (!(name in nameToUser)) nameToUser[name] = uid;
+  }
+
+  const reminded = [];
+  const skipped = [];
+  for (const session of sessions) {
+    const threadId = session.discordThreadId
+      || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
+    if (!threadId) { skipped.push({ sessionId: session.id, reason: 'no thread' }); continue; }
+
+    const payments = await getSessionPayments(session.id);
+    const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
+    if (unpaid.length === 0) { skipped.push({ sessionId: session.id, reason: 'no unpaid' }); continue; }
+
+    const thread = await client.channels.fetch(threadId).catch(() => null);
+    if (!thread) { skipped.push({ sessionId: session.id, reason: 'thread fetch failed' }); continue; }
+
+    const mentions = [];
+    const unpaidLines = unpaid.map((u) => {
+      const uid = nameToUser[u.playerName];
+      const who = uid ? `<@${uid}>` : `**${u.playerName}**`;
+      if (uid) mentions.push(uid);
+      return `• ${who} — owes $${u.owes.toFixed(2)}. ${pickRandom(TROLL_TAUNTS)}`;
+    });
+
+    // Bank player → mention if linked, otherwise bold name.
+    const bankId = session.bankPlayerId || identifyBankPlayer(session);
+    const bankPlayer = (session.players || []).find((p) => p.id === bankId);
+    const bankName = bankPlayer ? bankPlayer.name : 'the bank player';
+    const bankUid = nameToUser[bankName];
+    if (bankUid) mentions.push(bankUid);
+    const bankMention = bankUid ? `<@${bankUid}>` : `**${bankName}**`;
+
+    const content = buildReminderMessage({ session, unpaidLines, bankMention });
+    await thread.send({ content, allowedMentions: { users: mentions } });
+    reminded.push(session.id);
+  }
+  console.log(`Payment reminders: pinged ${reminded.length} thread(s)${sessionId ? ` (session ${sessionId})` : ''}.`);
+  return { reminded, skipped };
+}
+
+// Self-rescheduling daily timer (setTimeout, not setInterval, so DST shifts are
+// recomputed each day). Swallows errors so a transient failure doesn't kill the
+// loop — the next day still runs.
+function scheduleDailyReminders() {
+  const hour = Number(PAYMENT_REMINDER_HOUR);
+  const tz = PAYMENT_REMINDER_TZ;
+  const delay = msUntilNextLocalHour(new Date(), hour, tz);
+  console.log(`Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz}).`);
+  setTimeout(async () => {
+    try { await runPaymentReminders(); }
+    catch (err) { console.error('Daily payment reminder failed:', err.message); }
+    scheduleDailyReminders(); // reschedule for the following day
+  }, delay);
 }
 
 // -------- Discord event wiring --------
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  const handlers = { paid: handlePaidCommand, unpaid: handleUnpaidCommand };
+  const handler = handlers[interaction.commandName];
+  if (!handler) return;
+  try {
+    await handler(interaction);
+  } catch (err) {
+    console.error(`${interaction.commandName} command error:`, err);
+    if (!interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+  }
 });
 
 client.on('messageCreate', async (msg) => {
@@ -687,6 +1129,12 @@ client.on('messageCreate', async (msg) => {
 
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}.`);
+
+  // Register the /paid slash command and arm the daily reminder. Done before the
+  // startup scan (which can early-return) so neither is skipped.
+  await registerSlashCommands();
+  scheduleDailyReminders();
+
   // Catch-up scan: process every thread in the watched channel once on startup,
   // to recover threads created/posted while the bot was offline. Runs with the
   // 'scan' trigger, which imports a thread only if it was never imported before
@@ -762,6 +1210,86 @@ app.post('/announce/:sessionId', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ ok: true, user: client.user?.tag }));
+
+// POST /repost/:sessionId — post a FRESH results message into the session's
+// existing Discord thread (or create one if somehow missing). Unlike /announce,
+// this does not short-circuit when the session is already announced — it's for
+// re-posting after the results format changed (e.g. cash/bank split, role
+// mention). Idempotency is intentionally not enforced: each call posts again.
+//
+// ?clean=true first deletes the bot's prior 🎲 results post(s) in the thread, so
+// refreshing doesn't pile up duplicates. Only the bot's own results messages are
+// removed — human chatter and other bot posts (🎰 hand log, 🛑 blocks) are left.
+app.post('/repost/:sessionId', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  const clean = req.query.clean === 'true';
+  try {
+    const session = await trackerGet(`/sessions/${sessionId}`);
+
+    // Reuse the linked thread if present; otherwise make a new one.
+    const threadId = session.discordThreadId
+      || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
+
+    let thread;
+    if (threadId) {
+      thread = await client.channels.fetch(threadId).catch(() => null);
+    }
+    let createdThread = false;
+    if (!thread) {
+      const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+      if (!channel || channel.type !== ChannelType.GuildText) {
+        return res.status(500).json({ error: `Channel ${DISCORD_CHANNEL_ID} not a text channel` });
+      }
+      const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
+      thread = await channel.threads.create({
+        name: threadName,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        reason: 'Poker tracker results repost',
+      });
+      await trackerPut(`/sessions/${sessionId}`, { discordThreadId: thread.id });
+      createdThread = true;
+    }
+
+    // Clean up old results posts before adding the new one (skip on a brand-new
+    // thread — nothing to clean).
+    let cleaned = 0;
+    if (clean && !createdThread) {
+      cleaned = await deletePriorResultsPosts(thread, client.user.id);
+    }
+
+    await postResultsMessage(thread, session);
+    res.json({ ok: true, threadId: thread.id, reposted: true, cleaned });
+  } catch (err) {
+    console.error('repost error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Manually trigger the unpaid-debt reminder for every session that still has
+// outstanding bank transfers. Same content as the daily 10:00 NZ job.
+app.post('/remind', async (req, res) => {
+  try {
+    const result = await runPaymentReminders();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('remind error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Manually trigger the reminder for one specific session. 404 if the session id
+// isn't found; otherwise the response notes whether the thread was actually
+// pinged (e.g. skipped:no unpaid means everyone's already settled).
+app.post('/remind/:sessionId', async (req, res) => {
+  try {
+    const result = await runPaymentReminders({ sessionId: req.params.sessionId });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('remind/:sessionId error:', err);
+    const status = /not found/i.test(err.message) ? 404 : 500;
+    res.status(status).json({ error: err.message || String(err) });
+  }
+});
 
 app.listen(Number(BOT_HTTP_PORT), '127.0.0.1', () => {
   console.log(`Bot HTTP listening on http://127.0.0.1:${BOT_HTTP_PORT}`);

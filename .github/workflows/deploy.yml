@@ -1,0 +1,80 @@
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main, claude/tracker-deployment-location-n2eoA]
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: Build, lint & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            app/package-lock.json
+            backend/package-lock.json
+
+      # Frontend: install, type-check + build, lint. This is where breakage
+      # (TS errors, ESLint failures) would otherwise reach the server.
+      - name: Frontend build + lint
+        working-directory: app
+        run: |
+          npm ci
+          npm run build
+          npm run lint
+
+      # Backend: install deps, then run the EV/equity/parser + stats unit tests.
+      - name: Backend install + test
+        working-directory: backend
+        run: |
+          npm ci
+          npm test
+
+      # Bot has no lockfile, so use a plain install, then run its unit tests.
+      - name: Bot install + test
+        working-directory: bot
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+
+  deploy:
+    name: Deploy to VPS
+    needs: ci
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull + build + restart on the VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: |
+            set -e
+            cd /root/.openclaw/workspace/poker-tracker
+            OLD=$(git rev-parse HEAD)
+            git pull --ff-only
+            NEW=$(git rev-parse HEAD)
+            # Builds the frontend and restarts tribe-poker-backend.service.
+            bash deploy.sh
+            # Smart restart: only bounce the bot when bot/ code changed.
+            if git diff --name-only "$OLD" "$NEW" | grep -q '^bot/'; then
+              echo "bot/ changed — restarting bot"
+              systemctl restart tribe-poker-bot.service
+              sleep 3
+              systemctl is-active tribe-poker-bot.service
+            else
+              echo "bot/ unchanged — leaving bot running"
+            fi
+            # Health check — fail the deploy loudly if the site isn't serving.
+            echo "Health check..."
+            curl -fsS -o /dev/null https://srv1346724.hstgr.cloud/ && echo "frontend OK"
+            curl -fsS -o /dev/null https://srv1346724.hstgr.cloud/api/sessions && echo "backend OK"

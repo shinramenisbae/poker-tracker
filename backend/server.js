@@ -256,8 +256,14 @@ app.post('/api/sessions', (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?)
         `);
         
-        const cashOutAmount = player.cashOut?.amount || null;
-        const cashOutDate = player.cashOut?.timestamp ? new Date(player.cashOut.timestamp).toISOString() : null;
+        // Use ?? (not ||) so a real $0 cash-out is stored as 0, not dropped to
+        // null. Online imports (bot) send cashOut.amount = 0 for players who
+        // busted/cashed nothing; with || those rows looked like "never cashed
+        // out", leaving the session unfinishable on the Results page.
+        const cashOutAmount = player.cashOut?.amount ?? null;
+        const cashOutDate = player.cashOut
+          ? new Date(player.cashOut.timestamp ?? Date.now()).toISOString()
+          : null;
         
         playerStmt.run(
           player.id,
@@ -967,6 +973,100 @@ app.delete('/api/bank-accounts/:name', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ ok: true, name, deleted: this.changes });
   });
+});
+
+// --- Discord user ↔ player links ---
+// Lets the bot resolve a Discord user to a canonical player (for /paid) and
+// @mention the right user in reminders.
+
+// GET /api/discord-links → { links: { "<discordUserId>": "<playerName>" } }
+app.get('/api/discord-links', (req, res) => {
+  db.all('SELECT discordUserId, playerName FROM discord_links', [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const links = {};
+    for (const r of rows) links[r.discordUserId] = r.playerName;
+    res.json({ links });
+  });
+});
+
+// PUT /api/discord-links/:discordUserId  body: { playerName }
+app.put('/api/discord-links/:discordUserId', (req, res) => {
+  const discordUserId = (req.params.discordUserId || '').trim();
+  const playerName = ((req.body && req.body.playerName) || '').trim();
+  if (!discordUserId || !playerName) return res.status(400).json({ error: 'discordUserId and playerName required' });
+  const now = new Date().toISOString();
+  db.run(
+    `INSERT INTO discord_links (discordUserId, playerName, updatedAt) VALUES (?, ?, ?)
+     ON CONFLICT(discordUserId) DO UPDATE SET playerName = excluded.playerName, updatedAt = excluded.updatedAt`,
+    [discordUserId, playerName, now],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ discordUserId, playerName });
+    }
+  );
+});
+
+// DELETE /api/discord-links/:discordUserId
+app.delete('/api/discord-links/:discordUserId', (req, res) => {
+  const discordUserId = (req.params.discordUserId || '').trim();
+  if (!discordUserId) return res.status(400).json({ error: 'discordUserId required' });
+  db.run('DELETE FROM discord_links WHERE discordUserId = ?', [discordUserId], function (err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ ok: true, discordUserId, deleted: this.changes });
+  });
+});
+
+// --- Session payment tracking (/paid) ---
+
+// GET /api/sessions/:id/payments → { paid: { "<playerName>": { paidAt, paidBy } } }
+app.get('/api/sessions/:id/payments', (req, res) => {
+  db.all(
+    'SELECT playerName, paidAt, paidBy FROM session_payments WHERE sessionId = ?',
+    [req.params.id],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      const paid = {};
+      for (const r of rows) paid[r.playerName] = { paidAt: r.paidAt, paidBy: r.paidBy };
+      res.json({ paid });
+    }
+  );
+});
+
+// PUT /api/sessions/:id/payments/:playerName  body: { paidBy? }  → mark paid
+app.put('/api/sessions/:id/payments/:playerName', (req, res) => {
+  const sessionId = req.params.id;
+  const playerName = (req.params.playerName || '').trim();
+  const paidBy = ((req.body && req.body.paidBy) || '').trim() || null;
+  if (!playerName) return res.status(400).json({ error: 'playerName required' });
+  db.get('SELECT id FROM sessions WHERE id = ?', [sessionId], (err, sess) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!sess) return res.status(404).json({ error: 'Session not found' });
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO session_payments (sessionId, playerName, paidAt, paidBy) VALUES (?, ?, ?, ?)
+       ON CONFLICT(sessionId, playerName) DO UPDATE SET paidAt = excluded.paidAt, paidBy = excluded.paidBy`,
+      [sessionId, playerName, now, paidBy],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ ok: true, sessionId, playerName, paidAt: now, paidBy });
+      }
+    );
+  });
+});
+
+// DELETE /api/sessions/:id/payments/:playerName  → mark unpaid again
+app.delete('/api/sessions/:id/payments/:playerName', (req, res) => {
+  const sessionId = req.params.id;
+  const playerName = (req.params.playerName || '').trim();
+  if (!playerName) return res.status(400).json({ error: 'playerName required' });
+  db.run(
+    'DELETE FROM session_payments WHERE sessionId = ? AND playerName = ?',
+    [sessionId, playerName],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ ok: true, sessionId, playerName, deleted: this.changes });
+    }
+  );
 });
 
 // --- Hand log / all-in EV API ---
