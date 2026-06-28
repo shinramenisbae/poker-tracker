@@ -5,8 +5,9 @@ export const SB_BB = 0.5;
 export const BB_BB = 1;
 export const OPEN_BB = 2.5;
 
-const order = (p: Position) => ALL_POSITIONS.indexOf(p);
+export const order = (p: Position) => ALL_POSITIONS.indexOf(p);
 const round05 = (x: number) => Math.round(x * 2) / 2;
+const sumCommitted = (items: HistoryItem[]) => round05(items.reduce((a, h) => a + h.committedBb, 0));
 
 export interface SpotContext {
   potBb: number;
@@ -23,81 +24,88 @@ function blindPosted(pos: Position): number {
   return 0;
 }
 
-function isInPosition(hero: Position, villain: Position): boolean {
-  // hero acts after villain on later streets if hero is later in order, except blinds act first postflop.
-  // For 3-bet sizing we only need: hero in position vs the opener => hero seat later and hero not a blind.
-  return order(hero) > order(villain) && hero !== 'SB' && hero !== 'BB';
-}
-
 export function buildContext(
   category: Category,
   heroPos: Position,
   villainPos?: Position,
   effStackBb = 100,
 ): SpotContext {
-  if (category === 'rfi') {
-    return {
-      potBb: SB_BB + BB_BB,
-      toCallBb: 0,
-      legalActions: [FOLD, { kind: 'raise', label: `Open to ${OPEN_BB}bb`, sizeBb: OPEN_BB, bucket: 'raise', covers: ['raise', 'allin'] }],
-      actionHistory: history(heroPos, undefined, undefined),
-    };
-  }
-
-  if (category === 'push-fold') {
-    return {
-      potBb: SB_BB + BB_BB,
-      toCallBb: 0,
-      legalActions: [FOLD, { kind: 'allin', label: `Jam ${effStackBb}bb`, sizeBb: effStackBb, bucket: 'allin', covers: ['allin', 'raise'] }],
-      actionHistory: history(heroPos, undefined, undefined),
-    };
+  if (category === 'rfi' || category === 'push-fold') {
+    const actionHistory = openerHistory(heroPos);
+    const legalActions: ActionOption[] = category === 'rfi'
+      ? [FOLD, { kind: 'raise', label: `Open to ${OPEN_BB}bb`, sizeBb: OPEN_BB, bucket: 'raise', covers: ['raise', 'allin'] }]
+      : [FOLD, { kind: 'allin', label: `Jam ${effStackBb}bb`, sizeBb: effStackBb, bucket: 'allin', covers: ['allin', 'raise'] }];
+    return { potBb: sumCommitted(actionHistory), toCallBb: 0, actionHistory, legalActions };
   }
 
   if (category === 'vs-open') {
     const v = villainPos!;
-    const threeBet = round05(OPEN_BB * (isInPosition(heroPos, v) ? 3 : 4));
-    const pot = OPEN_BB + SB_BB + BB_BB; // blinds + opener (opener pays open; if opener is a blind this slightly overcounts — acceptable for display)
-    const toCall = OPEN_BB - blindPosted(heroPos);
+    const heroInPosVsVillain = order(heroPos) > order(v) && heroPos !== 'SB' && heroPos !== 'BB';
+    const threeBet = round05(OPEN_BB * (heroInPosVsVillain ? 3 : 4));
+    const toCall = round05(OPEN_BB - blindPosted(heroPos));
+    const actionHistory = vsOpenHistory(heroPos, v);
     return {
-      potBb: pot,
-      toCallBb: round05(toCall),
+      potBb: sumCommitted(actionHistory),
+      toCallBb: toCall,
       legalActions: [
         FOLD,
-        { kind: 'call', label: `Call ${round05(toCall)}bb`, sizeBb: round05(toCall), bucket: 'call', covers: ['call'] },
+        { kind: 'call', label: `Call ${toCall}bb`, sizeBb: toCall, bucket: 'call', covers: ['call'] },
         { kind: 'raise', label: `3-bet to ${threeBet}bb`, sizeBb: threeBet, bucket: 'raise', covers: ['raise', 'allin'] },
       ],
-      actionHistory: history(heroPos, v, OPEN_BB),
+      actionHistory,
     };
   }
 
-  // vs-3bet: hero opened, villain 3-bet; hero faces the 3-bet.
+  // vs-3bet: hero opened, a LATER villain 3-bet, and it folded back to hero.
   const v = villainPos!;
-  const villainIP = isInPosition(v, heroPos);
-  const threeBet = round05(OPEN_BB * (villainIP ? 3 : 4));
+  const villainInPos = order(v) > order(heroPos) && v !== 'SB' && v !== 'BB';
+  const threeBet = round05(OPEN_BB * (villainInPos ? 3 : 4));
   const fourBet = round05(threeBet * 2.2);
-  const pot = OPEN_BB + threeBet + SB_BB + BB_BB;
-  const toCall = threeBet - OPEN_BB;
+  const toCall = round05(threeBet - OPEN_BB);
+  const actionHistory = vs3betHistory(heroPos, v, threeBet);
   return {
-    potBb: round05(pot),
-    toCallBb: round05(toCall),
+    potBb: sumCommitted(actionHistory),
+    toCallBb: toCall,
     legalActions: [
       FOLD,
-      { kind: 'call', label: 'Call', sizeBb: round05(toCall), bucket: 'call', covers: ['call'] },
+      { kind: 'call', label: `Call ${toCall}bb`, sizeBb: toCall, bucket: 'call', covers: ['call'] },
       { kind: 'raise', label: `4-bet to ${fourBet}bb`, sizeBb: fourBet, bucket: 'raise', covers: ['raise', 'allin'] },
     ],
-    actionHistory: history(heroPos, v, threeBet),
+    actionHistory,
   };
 }
 
-/** Build a per-seat strip in betting order. Aggressor 'acted', hero 'hero', seats after hero 'pending', the rest 'fold'. */
-function history(heroPos: Position, aggressor: Position | undefined, amountBb: number | undefined): HistoryItem[] {
+/** rfi / push-fold: hero is the first voluntary actor. Earlier non-blinds folded; later seats (incl. live blinds) pending. */
+function openerHistory(heroPos: Position): HistoryItem[] {
   const hi = order(heroPos);
   return ALL_POSITIONS.map((pos): HistoryItem => {
-    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU' };
-    if (aggressor && pos === aggressor) {
-      return { pos, state: 'acted', label: amountBb ? `raise ${amountBb}` : 'raise', amountBb };
-    }
-    if (order(pos) > hi) return { pos, state: 'pending', label: 'to act' };
-    return { pos, state: 'fold', label: 'fold' };
+    const blind = blindPosted(pos);
+    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU', committedBb: blind, live: true };
+    if (order(pos) < hi && blind === 0) return { pos, state: 'fold', label: 'fold', committedBb: 0, live: false };
+    if (order(pos) > hi) return { pos, state: 'pending', label: 'to act', committedBb: blind, live: true };
+    // order(pos) < hi but a blind: treated as dead-folded money (can't happen for rfi heroes UTG..SB).
+    return { pos, state: 'fold', label: 'fold', committedBb: blind, live: false };
+  });
+}
+
+/** vs-open: villain (earlier) opened; hero faces it; seats after hero pending; the rest folded (blinds dead). */
+function vsOpenHistory(heroPos: Position, villain: Position): HistoryItem[] {
+  const hi = order(heroPos);
+  return ALL_POSITIONS.map((pos): HistoryItem => {
+    const blind = blindPosted(pos);
+    if (pos === villain) return { pos, state: 'acted', label: `raise ${OPEN_BB}`, amountBb: OPEN_BB, committedBb: OPEN_BB, live: true };
+    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU', committedBb: blind, live: true };
+    if (order(pos) > hi) return { pos, state: 'pending', label: 'to act', committedBb: blind, live: true };
+    return { pos, state: 'fold', label: 'fold', committedBb: blind, live: false };
+  });
+}
+
+/** vs-3bet: hero opened, villain (later) 3-bet, folded back to hero. Only hero + villain live; everyone else folded. */
+function vs3betHistory(heroPos: Position, villain: Position, threeBet: number): HistoryItem[] {
+  return ALL_POSITIONS.map((pos): HistoryItem => {
+    const blind = blindPosted(pos);
+    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU', committedBb: OPEN_BB, live: true };
+    if (pos === villain) return { pos, state: 'acted', label: `3-bet ${threeBet}`, amountBb: threeBet, committedBb: threeBet, live: true };
+    return { pos, state: 'fold', label: 'fold', committedBb: blind, live: false };
   });
 }

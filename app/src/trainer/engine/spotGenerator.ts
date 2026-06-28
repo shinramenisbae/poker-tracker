@@ -1,6 +1,6 @@
 import type { Category, Spot } from '../types';
 import { randomCombo, handClassOf } from '../ranges';
-import { buildContext } from '../sizing';
+import { buildContext, order } from '../sizing';
 import { availableScenarios, getStrategy } from '../charts';
 
 export interface GenerateOptions {
@@ -19,7 +19,15 @@ export function generateSpot(opts: GenerateOptions, rng: () => number = Math.ran
   if (opts.category === 'push-fold' && opts.depth) {
     scenarios = scenarios.filter(s => s.depth === opts.depth);
   }
-  if (scenarios.length === 0) throw new Error(`No scenarios for category ${opts.category}`);
+  // Filter out impossible preflop position combos so the table can't show a bad action order.
+  if (opts.category === 'vs-open') {
+    scenarios = scenarios.filter(s => s.villain && order(s.villain) < order(s.hero));
+  } else if (opts.category === 'vs-3bet') {
+    scenarios = scenarios.filter(s => s.villain && order(s.villain) > order(s.hero));
+  } else if (opts.category === 'rfi') {
+    scenarios = scenarios.filter(s => s.hero !== 'BB');
+  }
+  if (scenarios.length === 0) throw new Error(`No valid scenarios for category ${opts.category}`);
   const sc = pick(scenarios, rng);
 
   const effStack = opts.category === 'push-fold' ? (sc.depth ?? 15) : 100;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateSpot } from './spotGenerator';
 import { handClassOf } from '../ranges';
+import { order } from '../sizing';
 
 describe('spotGenerator', () => {
   const rng = () => 0.123; // deterministic
@@ -32,5 +33,19 @@ describe('spotGenerator', () => {
     const a = generateSpot({ category: 'rfi' }, () => 0.1);
     const b = generateSpot({ category: 'rfi' }, () => 0.9);
     expect(a.id).not.toBe(b.id);
+  });
+
+  it('positions are always valid across many sampled spots', () => {
+    for (let i = 0; i < 200; i++) {
+      const r = () => (i + 0.5) / 200;
+      const vo = generateSpot({ category: 'vs-open' }, r);
+      expect(order(vo.villainPos!)).toBeLessThan(order(vo.heroPos));
+
+      const v3 = generateSpot({ category: 'vs-3bet' }, r);
+      expect(order(v3.villainPos!)).toBeGreaterThan(order(v3.heroPos));
+
+      const rfi = generateSpot({ category: 'rfi' }, r);
+      expect(rfi.heroPos).not.toBe('BB');
+    }
   });
 });

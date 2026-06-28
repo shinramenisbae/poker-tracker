@@ -14,20 +14,79 @@ describe('sizing/context', () => {
     expect(open.covers).toEqual(['raise', 'allin']);
   });
 
-  it('vs-open BTN vs CO: pot = open + blinds, to call = open, buttons fold/call/3bet', () => {
+  it('RFI CO: UTG/HJ fold, CO hero, BTN pending, blinds posted + pending, pot 1.5', () => {
+    const ctx = buildContext('rfi', 'CO');
+    const at = (p: string) => ctx.actionHistory.find(h => h.pos === p)!;
+    expect(at('UTG').state).toBe('fold');
+    expect(at('HJ').state).toBe('fold');
+    expect(at('CO').state).toBe('hero');
+    expect(at('CO').committedBb).toBe(0);
+    expect(at('BTN').state).toBe('pending');
+    expect(at('SB').state).toBe('pending');
+    expect(at('SB').committedBb).toBeCloseTo(0.5);
+    expect(at('BB').state).toBe('pending');
+    expect(at('BB').committedBb).toBeCloseTo(1);
+    expect(ctx.potBb).toBeCloseTo(1.5);
+  });
+
+  it('vs-open BTN vs CO: villain acted 2.5, hero committed 0, pot=sum=4, toCall 2.5, 3bet 7.5', () => {
     const ctx = buildContext('vs-open', 'BTN', 'CO');
-    expect(ctx.potBb).toBeCloseTo(OPEN_BB + 1.5);
-    expect(ctx.toCallBb).toBeCloseTo(OPEN_BB);
+    const at = (p: string) => ctx.actionHistory.find(h => h.pos === p)!;
+    expect(at('CO').state).toBe('acted');
+    expect(at('CO').committedBb).toBeCloseTo(2.5);
+    expect(at('CO').live).toBe(true);
+    expect(at('BTN').state).toBe('hero');
+    expect(at('BTN').committedBb).toBe(0);
+    // potBb = sum of committed = 2.5 (open) + 0.5 (SB) + 1 (BB) = 4
+    expect(ctx.potBb).toBeCloseTo(4);
+    expect(ctx.toCallBb).toBeCloseTo(2.5);
     expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
     const tb = ctx.legalActions.find(a => a.kind === 'raise')!;
     expect(tb.label.startsWith('3-bet to ')).toBe(true);
-    // in position 3-bet = 3x open
-    expect(tb.sizeBb).toBeCloseTo(OPEN_BB * 3);
+    expect(tb.sizeBb).toBeCloseTo(7.5);
   });
 
   it('vs-open BB vs CO: BB already posted 1bb so to-call is reduced', () => {
     const ctx = buildContext('vs-open', 'BB', 'CO');
     expect(ctx.toCallBb).toBeCloseTo(OPEN_BB - 1);
+  });
+
+  it('vs-open BB vs SB (villain IS the blind): no blind double-count, pot 3.5', () => {
+    const ctx = buildContext('vs-open', 'BB', 'SB');
+    const at = (p: string) => ctx.actionHistory.find(h => h.pos === p)!;
+    // SB raised to 2.5 (this includes its 0.5 blind), BB has 1 posted.
+    expect(at('SB').state).toBe('acted');
+    expect(at('SB').committedBb).toBeCloseTo(2.5);
+    expect(at('BB').state).toBe('hero');
+    expect(at('BB').committedBb).toBeCloseTo(1);
+    // pot = 2.5 + 1 = 3.5 (no double-count of the SB blind)
+    expect(ctx.potBb).toBeCloseTo(3.5);
+  });
+
+  it('vs-3bet UTG vs BTN: hero opened 2.5, BTN 3bet 7.5, EVERYONE else fold, pot 11.5, toCall 5, 4bet 16.5', () => {
+    const ctx = buildContext('vs-3bet', 'UTG', 'BTN');
+    const at = (p: string) => ctx.actionHistory.find(h => h.pos === p)!;
+    expect(at('UTG').state).toBe('hero');
+    expect(at('UTG').committedBb).toBeCloseTo(2.5);
+    expect(at('UTG').live).toBe(true);
+    expect(at('BTN').state).toBe('acted');
+    expect(at('BTN').committedBb).toBeCloseTo(7.5);
+    // every other seat folded, NOT pending
+    expect(at('HJ').state).toBe('fold');
+    expect(at('CO').state).toBe('fold');
+    expect(at('SB').state).toBe('fold');
+    expect(at('BB').state).toBe('fold');
+    // dead blinds still committed in pot
+    expect(at('SB').committedBb).toBeCloseTo(0.5);
+    expect(at('BB').committedBb).toBeCloseTo(1);
+    expect(at('SB').live).toBe(false);
+    // pot = 2.5 + 7.5 + 0.5 + 1 = 11.5
+    expect(ctx.potBb).toBeCloseTo(11.5);
+    expect(ctx.toCallBb).toBeCloseTo(5);
+    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
+    const fb = ctx.legalActions.find(a => a.kind === 'raise')!;
+    expect(fb.label.startsWith('4-bet to ')).toBe(true);
+    expect(fb.sizeBb).toBeCloseTo(16.5);
   });
 
   it('push-fold: hero jams the effective stack, buttons fold/jam', () => {

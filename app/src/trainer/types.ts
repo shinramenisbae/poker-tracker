@@ -30,6 +30,8 @@ export interface HistoryItem {
   state: 'fold' | 'acted' | 'hero' | 'pending';
   label: string;            // 'fold', 'raise 2.5', 'YOU', 'to act'
   amountBb?: number;
+  committedBb: number;      // chips this seat has in front this street (blinds + raises)
+  live: boolean;            // still in the hand; a chip sprite is drawn only when live && committedBb > 0
 }
 
 export interface Spot {
