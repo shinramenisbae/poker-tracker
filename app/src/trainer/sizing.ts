@@ -32,8 +32,11 @@ export function buildContext(
 ): SpotContext {
   if (category === 'rfi' || category === 'push-fold') {
     const actionHistory = openerHistory(heroPos);
+    const open: ActionOption = { kind: 'raise', label: `Open to ${OPEN_BB}bb`, sizeBb: OPEN_BB, bucket: 'raise', covers: ['raise', 'allin'] };
+    // The MTT chart's SB first-in strategy mixes limps with opens, so SB gets a limp button.
+    const limp: ActionOption = { kind: 'call', label: 'Limp 1bb', sizeBb: BB_BB, bucket: 'call', covers: ['call', 'check'] };
     const legalActions: ActionOption[] = category === 'rfi'
-      ? [FOLD, { kind: 'raise', label: `Open to ${OPEN_BB}bb`, sizeBb: OPEN_BB, bucket: 'raise', covers: ['raise', 'allin'] }]
+      ? (heroPos === 'SB' ? [FOLD, limp, open] : [FOLD, open])
       : [FOLD, { kind: 'allin', label: `Jam ${effStackBb}bb`, sizeBb: effStackBb, bucket: 'allin', covers: ['allin', 'raise'] }];
     return { potBb: sumCommitted(actionHistory), toCallBb: 0, actionHistory, legalActions };
   }

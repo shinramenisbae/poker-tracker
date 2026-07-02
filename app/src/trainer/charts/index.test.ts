@@ -3,6 +3,8 @@ import { availableScenarios, getStrategy } from './index';
 import type { Position } from '../types';
 import { ALL_POSITIONS } from '../types';
 import { allHandClasses } from '../ranges';
+import { buildContext } from '../sizing';
+import { aggregate } from '../engine/grader';
 
 describe('chart store', () => {
   it('lists RFI hero positions from the chart data', () => {
@@ -74,6 +76,23 @@ describe('chart store', () => {
           const sum = Object.values(s).reduce((a, b) => a + (b ?? 0), 0);
           expect(sum, `${cat} ${sc.hero} vs ${sc.villain ?? '-'} ${hc}`).toBeGreaterThan(0.98);
           expect(sum).toBeLessThan(1.02);
+        }
+      }
+    }
+  });
+
+  it('the on-screen buttons cover ~100% of every strategy (no silently dropped mass)', () => {
+    // Regression guard for the SB limp bug: if a chart node carries action mass
+    // that no button covers, the feedback bars stop summing to 100%.
+    const hands = allHandClasses();
+    for (const cat of ['rfi', 'vs-open', 'vs-3bet'] as const) {
+      for (const sc of availableScenarios(cat)) {
+        const ctx = buildContext(cat, sc.hero, sc.villain);
+        for (const hc of hands) {
+          const strat = getStrategy(cat, sc.hero, hc, sc.villain);
+          const covered = Object.values(aggregate(ctx.legalActions, strat))
+            .reduce((a, b) => a + (b ?? 0), 0);
+          expect(covered, `${cat} ${sc.hero} vs ${sc.villain ?? '-'} ${hc}`).toBeGreaterThan(0.98);
         }
       }
     }

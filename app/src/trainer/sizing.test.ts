@@ -98,6 +98,17 @@ describe('sizing/context', () => {
     expect(fb.sizeBb).toBeCloseTo(16.5);
   });
 
+  it('RFI from SB offers a limp: the MTT chart mixes limps with opens first-in', () => {
+    const ctx = buildContext('rfi', 'SB');
+    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
+    const limp = ctx.legalActions.find(a => a.kind === 'call')!;
+    expect(limp.label).toBe('Limp 1bb');
+    expect(limp.bucket).toBe('call');
+    expect(limp.covers).toEqual(['call', 'check']);
+    // other RFI seats have no limp in the data — buttons stay fold/open
+    expect(buildContext('rfi', 'CO').legalActions.map(a => a.kind)).toEqual(['fold', 'raise']);
+  });
+
   it('push-fold: hero jams the effective stack, buttons fold/jam', () => {
     const ctx = buildContext('push-fold', 'BTN', undefined, 15);
     expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'allin']);
