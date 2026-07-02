@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { generateSpot } from './spotGenerator';
+import { generateSpot, isDecision, isMixed } from './spotGenerator';
 import { handClassOf } from '../ranges';
 import { order } from '../sizing';
+import type { ActionOption } from '../types';
 
 describe('spotGenerator', () => {
   const rng = () => 0.123; // deterministic
@@ -47,5 +48,37 @@ describe('spotGenerator', () => {
       const rfi = generateSpot({ category: 'rfi' }, r);
       expect(rfi.heroPos).not.toBe('BB');
     }
+  });
+});
+
+describe('biased dealing', () => {
+  const ACTIONS: ActionOption[] = [
+    { kind: 'fold', label: 'Fold', bucket: 'fold', covers: ['fold'] },
+    { kind: 'call', label: 'Call', bucket: 'call', covers: ['call'] },
+    { kind: 'raise', label: '3-bet', bucket: 'raise', covers: ['raise', 'allin'] },
+  ];
+
+  it('isDecision: pure folds are trivial, anything else is a decision', () => {
+    expect(isDecision({ fold: 1 })).toBe(false);
+    expect(isDecision({ raise: 1 })).toBe(true);
+    expect(isDecision({ raise: 0.5, fold: 0.5 })).toBe(true);
+  });
+
+  it('isMixed: needs two buttons played >=5% in button space', () => {
+    expect(isMixed(ACTIONS, { raise: 0.7, fold: 0.3 })).toBe(true);
+    expect(isMixed(ACTIONS, { raise: 1 })).toBe(false);
+    expect(isMixed(ACTIONS, { raise: 0.97, call: 0.03 })).toBe(false);
+    // raise+allin collapse into one button: NOT a visible mix
+    expect(isMixed(ACTIONS, { raise: 0.5, allin: 0.5 })).toBe(false);
+  });
+
+  it('deals mostly decision-relevant hands but still some clear folds (RFI, 300 spots)', () => {
+    const spots = Array.from({ length: 300 }, () => generateSpot({ category: 'rfi' }));
+    const decisions = spots.filter((s) => isDecision(s.strategy)).length;
+    const folds = spots.length - decisions;
+    // uniform dealing would put decisions at ~25%; the bias should lift it well above 45%
+    expect(decisions / spots.length).toBeGreaterThan(0.45);
+    // ...without eliminating clear folds entirely (they stay part of the drill)
+    expect(folds).toBeGreaterThan(5);
   });
 });
