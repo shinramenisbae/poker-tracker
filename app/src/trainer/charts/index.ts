@@ -1,7 +1,7 @@
 import type { Category, HandClass, Position, Strategy } from '../types';
 import { ALL_POSITIONS } from '../types';
-import { charts as greenline } from './source/greenline';
-import { chartCellStrategy, notationStrategy } from './convert';
+import { mttCharts } from './source/mtt60';
+import { tableStrategy, notationStrategy } from './convert';
 import { pushFold, pushFoldKey, PUSH_FOLD_DEPTHS } from './pushfold';
 
 export interface ScenarioRef {
@@ -17,38 +17,13 @@ const SCENARIO_TOKEN: Record<Exclude<Category, 'push-fold'>, string> = {
   'vs-3bet': 'vs-3bet',
 };
 
-/**
- * The vendored Greenline data uses 'MP' for the seat the trainer calls 'HJ'.
- * This map translates our Position vocabulary to the data-file key vocabulary.
- */
-const POSITION_TO_DATA: Record<Position, string> = {
-  UTG: 'UTG',
-  HJ: 'MP',
-  CO: 'CO',
-  BTN: 'BTN',
-  SB: 'SB',
-  BB: 'BB',
-};
-
-/** Reverse map: data-file token → our Position type. */
-const DATA_TO_POSITION: Record<string, Position> = {
-  UTG: 'UTG',
-  MP: 'HJ',
-  CO: 'CO',
-  BTN: 'BTN',
-  SB: 'SB',
-  BB: 'BB',
-};
-
-function parseDataPosition(s: string): Position | undefined {
-  return DATA_TO_POSITION[s];
-}
+const CHART_SOURCE = 'MTT charts (MIT, poker-hand-review)';
 
 function parsePosition(s: string): Position | undefined {
   return (ALL_POSITIONS as string[]).includes(s) ? (s as Position) : undefined;
 }
 
-/** Greenline chart keys look like 'UTG-RFI' or 'SB-vs-open-BTN'. */
+/** Chart keys look like 'UTG-RFI', 'SB-vs-open-BTN', or 'CO-vs-3bet-BB' (trainer position vocab). */
 export function availableScenarios(category: Category): ScenarioRef[] {
   if (category === 'push-fold') {
     const out: ScenarioRef[] = [];
@@ -65,21 +40,19 @@ export function availableScenarios(category: Category): ScenarioRef[] {
 
   const token = SCENARIO_TOKEN[category];
   const out: ScenarioRef[] = [];
-  for (const key of Object.keys(greenline)) {
-    // hero-RFI  OR  hero-vs-open-villain  OR  hero-vs-3bet-villain
-    // Note: data uses 'MP' for the seat our Position type calls 'HJ'.
+  for (const key of Object.keys(mttCharts)) {
     if (category === 'rfi') {
       const m = key.match(/^([A-Z]{2,3})-RFI$/);
       if (m) {
-        const hero = parseDataPosition(m[1]);
-        if (hero) out.push({ hero, source: 'Greenline (MIT)' });
+        const hero = parsePosition(m[1]);
+        if (hero) out.push({ hero, source: CHART_SOURCE });
       }
     } else {
       const m = key.match(new RegExp(`^([A-Z]{2,3})-${token}-([A-Z]{2,3})$`));
       if (m) {
-        const hero = parseDataPosition(m[1]);
-        const villain = parseDataPosition(m[2]);
-        if (hero && villain) out.push({ hero, villain, source: 'Greenline (MIT)' });
+        const hero = parsePosition(m[1]);
+        const villain = parsePosition(m[2]);
+        if (hero && villain) out.push({ hero, villain, source: CHART_SOURCE });
       }
     }
   }
@@ -99,9 +72,6 @@ export function getStrategy(
     return notationStrategy(notation, hand);
   }
   const token = SCENARIO_TOKEN[category];
-  // Translate Position vocab → data-file vocab (HJ → MP) before building the key.
-  const heroKey = POSITION_TO_DATA[hero];
-  const villainKey = villain ? POSITION_TO_DATA[villain] : undefined;
-  const key = villainKey ? `${heroKey}-${token}-${villainKey}` : `${heroKey}-${token}`;
-  return chartCellStrategy(greenline[key], hand);
+  const key = villain ? `${hero}-${token}-${villain}` : `${hero}-${token}`;
+  return tableStrategy(mttCharts[key], hand);
 }

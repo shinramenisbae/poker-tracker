@@ -59,7 +59,7 @@ export function FeedbackPanel({ spot, result, onNext, stats }: Props) {
       </div>
 
       <div className="text-xs text-text-secondary mt-3 bg-surface-secondary border border-bg-tertiary rounded-lg p-2">
-        Graded by frequency (the free preflop charts don't carry EV). Per-hand EV-loss arrives with the postflop phase.
+        Graded by frequency against MIT-licensed MTT-derived charts (GTO-style, not solver-authoritative). Per-hand EV-loss arrives with the postflop phase.
       </div>
 
       <button onClick={() => setShowRange((v) => !v)} className="text-sm text-accent-primary mt-3 hover:underline">

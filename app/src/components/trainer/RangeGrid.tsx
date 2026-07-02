@@ -10,15 +10,29 @@ interface Props {
   highlight: HandClass;
 }
 
-/** Action color, separate from the green/red grading palette. */
-function cellColor(strat: ReturnType<typeof getStrategy>): string {
+// Action palette, separate from the green/red grading palette.
+const RAISE_C = '#8B7355';  // accent-primary (brown)
+const CALL_C = '#9aa77f';   // muted olive
+const FOLD_C = '#E5DED4';   // bg-tertiary (grey)
+
+/**
+ * Cell background reflects the hand's actual action split: pure cells are solid,
+ * mixed cells show proportional color segments (raise | call | fold).
+ */
+function cellStyle(strat: ReturnType<typeof getStrategy>): { className: string; style?: React.CSSProperties } {
   const raise = (strat.raise ?? 0) + (strat.allin ?? 0);
   const call = strat.call ?? 0;
-  const fold = strat.fold ?? 0;
-  if (fold >= 0.999) return 'bg-bg-tertiary text-text-tertiary';      // fold
-  if (raise > 0 && call > 0) return 'bg-accent-primary/70 text-text-inverse'; // mixed
-  if (raise >= call) return 'bg-accent-primary text-text-inverse';    // raise
-  return 'bg-[#9aa77f] text-text-inverse';                            // call (muted olive)
+  const fold = Math.max(0, 1 - raise - call);
+  if (fold >= 0.95) return { className: 'bg-bg-tertiary text-text-tertiary' };
+  if (raise >= 0.95) return { className: 'bg-accent-primary text-text-inverse' };
+  if (call >= 0.95) return { className: 'bg-[#9aa77f] text-text-inverse' };
+  const r = raise * 100, c = (raise + call) * 100;
+  return {
+    className: fold >= 0.5 ? 'text-text-secondary' : 'text-text-inverse',
+    style: {
+      background: `linear-gradient(to right, ${RAISE_C} 0% ${r}%, ${CALL_C} ${r}% ${c}%, ${FOLD_C} ${c}% 100%)`,
+    },
+  };
 }
 
 export function RangeGrid({ category, hero, villain, depth, highlight }: Props) {
@@ -28,6 +42,7 @@ export function RangeGrid({ category, hero, villain, depth, highlight }: Props) 
       {hands.map((hc) => {
         const strat = getStrategy(category, hero, hc, villain, depth);
         const isHero = hc === highlight;
+        const cell = cellStyle(strat);
         return (
           <div
             key={hc}
@@ -36,9 +51,10 @@ export function RangeGrid({ category, hero, villain, depth, highlight }: Props) 
             title={hc}
             className={[
               'aspect-square rounded-[3px] text-[9px] font-bold flex items-center justify-center',
-              cellColor(strat),
+              cell.className,
               isHero ? 'outline outline-2 outline-text-primary z-10' : '',
             ].join(' ')}
+            style={cell.style}
           >
             {hc}
           </div>

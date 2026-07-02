@@ -28,6 +28,8 @@ Four spot categories, all using free/bundled chart data, **no solver, no backend
 
 > **Amendment (2026-07-02):** push/fold depths shipped as **5 / 10 / 15 / 20bb**. The real Nash source (`a1r93/push-or-fold`, MIT — digitized Jennifear MTT chart, §6) covers 1–20bb only; no published open-jam data exists at 25bb (open-jamming 25bb is not a realistic strategy). The hand-authored starter ranges were replaced with a verified conversion of that source.
 
+> **Amendment (2026-07-02, mixed frequencies):** the Greenline study charts (pure actions, ~4% mixed cells) were replaced for RFI / vs-open / vs-3bet by `matthiola0/poker-hand-review` (MIT) — MTT-derived charts with real per-hand mixed frequencies (60bb+ bucket from 100bb solves, 8-max seats mapped to 6-max, MP/LJ→UTG). Spots are labeled "MTT 6-max" honestly. The spot generator also gained a dealer bias: 60% of deals hunt for a mixed or at least non-trivial hand, the rest stay uniform so clear folds remain in the drill.
+
 **Deep vs shallow:** the cash categories (1–3) are **100bb** (deep) because that's what the free charts provide; category 4 supplies the **shallow** practice. Intermediate cash depths (e.g. 40/60bb) are an accepted v1 limitation — they'd need extra chart data and are deferred (§12).
 
 ### Phase 2 — Postflop trainer (designed-for, not built now)

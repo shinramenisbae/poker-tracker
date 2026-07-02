@@ -2,23 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { availableScenarios, getStrategy } from './index';
 import type { Position } from '../types';
 import { ALL_POSITIONS } from '../types';
+import { allHandClasses } from '../ranges';
 
 describe('chart store', () => {
-  it('lists RFI hero positions from the Greenline data', () => {
+  it('lists RFI hero positions from the chart data', () => {
     const rfi = availableScenarios('rfi');
     expect(rfi.length).toBeGreaterThan(0);
     expect(rfi.every(s => s.hero && !s.villain)).toBe(true);
     expect(rfi.map(s => s.hero)).toContain('UTG');
   });
 
-  it('RFI includes HJ (mapped from MP in the vendored data)', () => {
-    const rfi = availableScenarios('rfi');
-    const heroes = rfi.map(s => s.hero);
-    // The vendored data stores 'MP-RFI'; we must surface it as HJ.
-    expect(heroes).toContain('HJ');
-  });
-
-  it('RFI surfaces all six positions', () => {
+  it('RFI surfaces all opening positions', () => {
     const rfi = availableScenarios('rfi');
     const heroes = new Set(rfi.map(s => s.hero));
     // UTG, HJ, CO, BTN, SB all have RFI charts; BB does not open-raise.
@@ -31,12 +25,7 @@ describe('chart store', () => {
     const vo = availableScenarios('vs-open');
     expect(vo.length).toBeGreaterThan(0);
     expect(vo.every(s => !!s.villain)).toBe(true);
-  });
-
-  it('vs-open includes HJ as a villain (mapped from MP in the vendored data)', () => {
-    const vo = availableScenarios('vs-open');
-    const villains = vo.map(s => s.villain);
-    expect(villains).toContain('HJ');
+    expect(vo.map(s => s.villain)).toContain('HJ');
   });
 
   it('push-fold scenarios carry a depth', () => {
@@ -59,9 +48,7 @@ describe('chart store', () => {
     expect(strat.fold).toBe(1);
   });
 
-  it('AA is not a fold for HJ RFI (tests HJ→MP data key translation)', () => {
-    // If the mapping were broken, getStrategy('rfi','HJ',…) would look up 'HJ-RFI'
-    // (which doesn't exist) and return {fold:1} for every hand including AA.
+  it('AA is not a fold for HJ RFI', () => {
     const strat = getStrategy('rfi', 'HJ', 'AA');
     expect((strat.fold ?? 0)).toBeLessThan(1);
   });
@@ -76,5 +63,43 @@ describe('chart store', () => {
         }
       }
     }
+  });
+
+  it('every chart strategy sums to ~1 across all scenarios and hands', () => {
+    const hands = allHandClasses();
+    for (const cat of ['rfi', 'vs-open', 'vs-3bet'] as const) {
+      for (const sc of availableScenarios(cat)) {
+        for (const hc of hands) {
+          const s = getStrategy(cat, sc.hero, hc, sc.villain);
+          const sum = Object.values(s).reduce((a, b) => a + (b ?? 0), 0);
+          expect(sum, `${cat} ${sc.hero} vs ${sc.villain ?? '-'} ${hc}`).toBeGreaterThan(0.98);
+          expect(sum).toBeLessThan(1.02);
+        }
+      }
+    }
+  });
+
+  it('charts carry genuinely mixed frequencies (the point of this dataset)', () => {
+    const hands = allHandClasses();
+    const mixedShare = (cat: 'rfi' | 'vs-open' | 'vs-3bet') => {
+      let mixed = 0, total = 0;
+      for (const sc of availableScenarios(cat)) {
+        for (const hc of hands) {
+          const s = getStrategy(cat, sc.hero, hc, sc.villain);
+          // button space: raise and allin share one button
+          const btn = [(s.raise ?? 0) + (s.allin ?? 0), s.call ?? 0, s.fold ?? 0];
+          total++;
+          if (btn.filter(f => f >= 0.05).length >= 2) mixed++;
+        }
+      }
+      return mixed / total;
+    };
+    expect(mixedShare('vs-open')).toBeGreaterThan(0.15);
+    expect(mixedShare('rfi')).toBeGreaterThan(0.05);
+    expect(mixedShare('vs-3bet')).toBeGreaterThan(0.05);
+    // a known nuanced cell: BB defending vs BTN open mixes 3-bet and call with ATs
+    const ats = getStrategy('vs-open', 'BB', 'ATs', 'BTN');
+    expect(ats.raise ?? 0).toBeGreaterThan(0.05);
+    expect(ats.call ?? 0).toBeGreaterThan(0.5);
   });
 });

@@ -37,7 +37,7 @@ export interface HistoryItem {
 export interface Spot {
   id: string;
   category: Category;
-  format: string;           // "Cash 6-max" | "MTT"
+  format: string;           // "MTT 6-max" | "MTT"
   effStackBb: number;
   heroPos: Position;
   villainPos?: Position;
