@@ -57,7 +57,7 @@ export function availableScenarios(category: Category): ScenarioRef[] {
       const hero = parsePosition(pos);
       const depth = Number(depthStr);
       if (hero && (PUSH_FOLD_DEPTHS as readonly number[]).includes(depth)) {
-        out.push({ hero, depth, source: 'push/fold (GTO-style)' });
+        out.push({ hero, depth, source: 'Nash push/fold (Jennifear, MIT)' });
       }
     }
     return out;

@@ -26,6 +26,8 @@ Four spot categories, all using free/bundled chart data, **no solver, no backend
 3. **Facing a 3-bet** — you opened and got 3-bet: fold / call / 4-bet.
 4. **Short-stack push/fold** — jam all-in or fold, across a **range of depths (10 / 15 / 20 / 25bb)** so users practice shallow vs deeper short stacks (separate Nash data).
 
+> **Amendment (2026-07-02):** push/fold depths shipped as **5 / 10 / 15 / 20bb**. The real Nash source (`a1r93/push-or-fold`, MIT — digitized Jennifear MTT chart, §6) covers 1–20bb only; no published open-jam data exists at 25bb (open-jamming 25bb is not a realistic strategy). The hand-authored starter ranges were replaced with a verified conversion of that source.
+
 **Deep vs shallow:** the cash categories (1–3) are **100bb** (deep) because that's what the free charts provide; category 4 supplies the **shallow** practice. Intermediate cash depths (e.g. 40/60bb) are an accepted v1 limitation — they'd need extra chart data and are deferred (§12).
 
 ### Phase 2 — Postflop trainer (designed-for, not built now)
