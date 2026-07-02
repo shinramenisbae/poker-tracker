@@ -11,7 +11,7 @@ describe('spotGenerator', () => {
     const spot = generateSpot({ category: 'rfi' }, rng);
     expect(spot.category).toBe('rfi');
     expect(spot.villainPos).toBeUndefined();
-    expect(spot.legalActions.map(a => a.kind)).toEqual(['fold', 'raise']);
+    expect(spot.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise', 'allin']);
     expect(spot.heroHand).toHaveLength(2);
     expect(spot.handClass).toBe(handClassOf(spot.heroHand[0], spot.heroHand[1]));
     const sum = Object.values(spot.strategy).reduce((a, b) => a + (b ?? 0), 0);
@@ -21,7 +21,7 @@ describe('spotGenerator', () => {
   it('builds a vs-open spot with a villain before the hero', () => {
     const spot = generateSpot({ category: 'vs-open' }, rng);
     expect(spot.villainPos).toBeDefined();
-    expect(spot.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
+    expect(spot.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise', 'allin']);
   });
 
   it('builds a push-fold spot with a depth and jam button', () => {

@@ -30,14 +30,17 @@ export function buildContext(
   villainPos?: Position,
   effStackBb = 100,
 ): SpotContext {
+  // Every spot offers the full four-action menu (fold / limp-or-call / raise / all-in).
+  // Actions the chart never takes grade at 0% — deliberate trap options.
+  const allIn = (label = `All-in ${effStackBb}bb`): ActionOption =>
+    ({ kind: 'allin', label, sizeBb: effStackBb, bucket: 'allin', covers: ['allin'] });
+  const limp: ActionOption = { kind: 'call', label: 'Limp 1bb', sizeBb: BB_BB, bucket: 'call', covers: ['call', 'check'] };
+
   if (category === 'rfi' || category === 'push-fold') {
     const actionHistory = openerHistory(heroPos);
-    const open: ActionOption = { kind: 'raise', label: `Open to ${OPEN_BB}bb`, sizeBb: OPEN_BB, bucket: 'raise', covers: ['raise', 'allin'] };
-    // The MTT chart's SB first-in strategy mixes limps with opens, so SB gets a limp button.
-    const limp: ActionOption = { kind: 'call', label: 'Limp 1bb', sizeBb: BB_BB, bucket: 'call', covers: ['call', 'check'] };
     const legalActions: ActionOption[] = category === 'rfi'
-      ? (heroPos === 'SB' ? [FOLD, limp, open] : [FOLD, open])
-      : [FOLD, { kind: 'allin', label: `Jam ${effStackBb}bb`, sizeBb: effStackBb, bucket: 'allin', covers: ['allin', 'raise'] }];
+      ? [FOLD, limp, { kind: 'raise', label: `Open to ${OPEN_BB}bb`, sizeBb: OPEN_BB, bucket: 'raise', covers: ['raise'] }, allIn()]
+      : [FOLD, limp, { kind: 'raise', label: 'Min-raise to 2bb', sizeBb: 2, bucket: 'raise', covers: ['raise'] }, allIn(`Jam ${effStackBb}bb`)];
     return { potBb: sumCommitted(actionHistory), toCallBb: 0, actionHistory, legalActions };
   }
 
@@ -53,7 +56,8 @@ export function buildContext(
       legalActions: [
         FOLD,
         { kind: 'call', label: `Call ${toCall}bb`, sizeBb: toCall, bucket: 'call', covers: ['call'] },
-        { kind: 'raise', label: `3-bet to ${threeBet}bb`, sizeBb: threeBet, bucket: 'raise', covers: ['raise', 'allin'] },
+        { kind: 'raise', label: `3-bet to ${threeBet}bb`, sizeBb: threeBet, bucket: 'raise', covers: ['raise'] },
+        allIn(),
       ],
       actionHistory,
     };
@@ -72,7 +76,8 @@ export function buildContext(
     legalActions: [
       FOLD,
       { kind: 'call', label: `Call ${toCall}bb`, sizeBb: toCall, bucket: 'call', covers: ['call'] },
-      { kind: 'raise', label: `4-bet to ${fourBet}bb`, sizeBb: fourBet, bucket: 'raise', covers: ['raise', 'allin'] },
+      { kind: 'raise', label: `4-bet to ${fourBet}bb`, sizeBb: fourBet, bucket: 'raise', covers: ['raise'] },
+      allIn(),
     ],
     actionHistory,
   };

@@ -2,16 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { buildContext, OPEN_BB } from './sizing';
 
 describe('sizing/context', () => {
-  it('RFI: pot is the blinds, hero opens, buttons are fold + open', () => {
+  it('RFI: pot is the blinds; all four actions offered; raise no longer absorbs allin', () => {
     const ctx = buildContext('rfi', 'CO');
     expect(ctx.potBb).toBeCloseTo(1.5);
     expect(ctx.toCallBb).toBe(0);
-    const kinds = ctx.legalActions.map(a => a.kind);
-    expect(kinds).toEqual(['fold', 'raise']);
+    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise', 'allin']);
     const open = ctx.legalActions.find(a => a.kind === 'raise')!;
     expect(open.sizeBb).toBe(OPEN_BB);
     expect(open.label).toBe(`Open to ${OPEN_BB}bb`);
-    expect(open.covers).toEqual(['raise', 'allin']);
+    expect(open.covers).toEqual(['raise']);
+    expect(ctx.legalActions.find(a => a.kind === 'call')!.label).toBe('Limp 1bb');
+    const jam = ctx.legalActions.find(a => a.kind === 'allin')!;
+    expect(jam.label).toBe('All-in 100bb');
+    expect(jam.covers).toEqual(['allin']);
   });
 
   it('RFI CO: UTG/HJ fold, CO hero, BTN pending, blinds posted + pending, pot 1.5', () => {
@@ -40,10 +43,11 @@ describe('sizing/context', () => {
     // potBb = sum of committed = 2.5 (open) + 0.5 (SB) + 1 (BB) = 4
     expect(ctx.potBb).toBeCloseTo(4);
     expect(ctx.toCallBb).toBeCloseTo(2.5);
-    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
+    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise', 'allin']);
     const tb = ctx.legalActions.find(a => a.kind === 'raise')!;
     expect(tb.label.startsWith('3-bet to ')).toBe(true);
     expect(tb.sizeBb).toBeCloseTo(7.5);
+    expect(tb.covers).toEqual(['raise']);
   });
 
   it('vs-open BB vs CO: BB already posted 1bb so to-call is reduced', () => {
@@ -92,30 +96,36 @@ describe('sizing/context', () => {
     // pot = 2.5 + 7.5 + 0.5 + 1 = 11.5
     expect(ctx.potBb).toBeCloseTo(11.5);
     expect(ctx.toCallBb).toBeCloseTo(5);
-    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
+    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise', 'allin']);
     const fb = ctx.legalActions.find(a => a.kind === 'raise')!;
     expect(fb.label.startsWith('4-bet to ')).toBe(true);
     expect(fb.sizeBb).toBeCloseTo(16.5);
+    // the chart's jam mass gets its own button now, not folded into the 4-bet
+    expect(fb.covers).toEqual(['raise']);
+    expect(ctx.legalActions.find(a => a.kind === 'allin')!.covers).toEqual(['allin']);
   });
 
-  it('RFI from SB offers a limp: the MTT chart mixes limps with opens first-in', () => {
-    const ctx = buildContext('rfi', 'SB');
-    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise']);
-    const limp = ctx.legalActions.find(a => a.kind === 'call')!;
-    expect(limp.label).toBe('Limp 1bb');
-    expect(limp.bucket).toBe('call');
+  it('every preflop category offers the full four-action menu (trap options included)', () => {
+    for (const ctx of [
+      buildContext('rfi', 'SB'),
+      buildContext('vs-open', 'BTN', 'CO'),
+      buildContext('vs-3bet', 'UTG', 'BTN'),
+      buildContext('push-fold', 'BTN', undefined, 15),
+    ]) {
+      expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'call', 'raise', 'allin']);
+    }
+    const limp = buildContext('rfi', 'SB').legalActions.find(a => a.kind === 'call')!;
     expect(limp.covers).toEqual(['call', 'check']);
-    // other RFI seats have no limp in the data — buttons stay fold/open
-    expect(buildContext('rfi', 'CO').legalActions.map(a => a.kind)).toEqual(['fold', 'raise']);
   });
 
-  it('push-fold: hero jams the effective stack, buttons fold/jam', () => {
+  it('push-fold: jam is the stack; limp and min-raise are graded trap options', () => {
     const ctx = buildContext('push-fold', 'BTN', undefined, 15);
-    expect(ctx.legalActions.map(a => a.kind)).toEqual(['fold', 'allin']);
     const jam = ctx.legalActions.find(a => a.kind === 'allin')!;
     expect(jam.sizeBb).toBe(15);
     expect(jam.label).toBe('Jam 15bb');
-    expect(jam.covers).toEqual(['allin', 'raise']);
+    expect(jam.covers).toEqual(['allin']);
+    expect(ctx.legalActions.find(a => a.kind === 'call')!.label).toBe('Limp 1bb');
+    expect(ctx.legalActions.find(a => a.kind === 'raise')!.label).toBe('Min-raise to 2bb');
   });
 
   it('action history marks folds, the aggressor, hero, and pending blinds', () => {

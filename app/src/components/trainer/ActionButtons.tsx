@@ -9,7 +9,8 @@ interface Props {
 
 export function ActionButtons({ actions, disabled, onChoose, chosen }: Props) {
   return (
-    <div className="flex gap-2 mt-4">
+    // 2x2 grid on narrow screens so four buttons don't wrap; single row from sm up
+    <div className="grid grid-cols-2 sm:flex gap-2 mt-4">
       {actions.map((a) => {
         const isFold = a.kind === 'fold';
         const isChosen = chosen === a.bucket;
@@ -19,7 +20,7 @@ export function ActionButtons({ actions, disabled, onChoose, chosen }: Props) {
             disabled={disabled}
             onClick={() => onChoose(a.bucket)}
             className={[
-              'flex-1 rounded-xl px-2 py-3 font-semibold text-sm border transition-colors disabled:opacity-60',
+              'sm:flex-1 rounded-xl px-2 py-3 font-semibold text-sm border transition-colors disabled:opacity-60',
               isChosen ? 'ring-2 ring-text-primary' : '',
               isFold
                 ? 'text-accent-negative border-accent-negative/40 bg-surface-secondary'
