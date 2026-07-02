@@ -27,8 +27,8 @@ export interface ActionOption {
 
 export interface HistoryItem {
   pos: Position;
-  state: 'fold' | 'acted' | 'hero' | 'pending';
-  label: string;            // 'fold', 'raise 2.5', 'YOU', 'to act'
+  state: 'fold' | 'acted' | 'hero' | 'hero-acted' | 'pending';
+  label: string;            // 'fold', 'raise 2.5', 'to act'
   amountBb?: number;
   committedBb: number;      // chips this seat has in front this street (blinds + raises)
   live: boolean;            // still in the hand; a chip sprite is drawn only when live && committedBb > 0

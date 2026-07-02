@@ -80,7 +80,7 @@ function openerHistory(heroPos: Position): HistoryItem[] {
   const hi = order(heroPos);
   return ALL_POSITIONS.map((pos): HistoryItem => {
     const blind = blindPosted(pos);
-    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU', committedBb: blind, live: true };
+    if (pos === heroPos) return { pos, state: 'hero', label: 'to act', committedBb: blind, live: true };
     if (order(pos) < hi && blind === 0) return { pos, state: 'fold', label: 'fold', committedBb: 0, live: false };
     if (order(pos) > hi) return { pos, state: 'pending', label: 'to act', committedBb: blind, live: true };
     // order(pos) < hi but a blind: treated as dead-folded money (can't happen for rfi heroes UTG..SB).
@@ -94,18 +94,24 @@ function vsOpenHistory(heroPos: Position, villain: Position): HistoryItem[] {
   return ALL_POSITIONS.map((pos): HistoryItem => {
     const blind = blindPosted(pos);
     if (pos === villain) return { pos, state: 'acted', label: `raise ${OPEN_BB}`, amountBb: OPEN_BB, committedBb: OPEN_BB, live: true };
-    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU', committedBb: blind, live: true };
+    if (pos === heroPos) return { pos, state: 'hero', label: 'to act', committedBb: blind, live: true };
     if (order(pos) > hi) return { pos, state: 'pending', label: 'to act', committedBb: blind, live: true };
     return { pos, state: 'fold', label: 'fold', committedBb: blind, live: false };
   });
 }
 
-/** vs-3bet: hero opened, villain (later) 3-bet, folded back to hero. Only hero + villain live; everyone else folded. */
+/**
+ * vs-3bet: hero opened, villain (later) 3-bet, folded back to hero. Only hero + villain live;
+ * everyone else folded. The strip is a timeline, so the hero appears twice: his seat cell shows
+ * the open he already made, and a trailing cell shows the action back on him. The trailing cell
+ * carries committedBb 0 so the pot sum and bet-chip sprites count his chips exactly once.
+ */
 function vs3betHistory(heroPos: Position, villain: Position, threeBet: number): HistoryItem[] {
-  return ALL_POSITIONS.map((pos): HistoryItem => {
+  const seats = ALL_POSITIONS.map((pos): HistoryItem => {
     const blind = blindPosted(pos);
-    if (pos === heroPos) return { pos, state: 'hero', label: 'YOU', committedBb: OPEN_BB, live: true };
+    if (pos === heroPos) return { pos, state: 'hero-acted', label: `raise ${OPEN_BB}`, amountBb: OPEN_BB, committedBb: OPEN_BB, live: true };
     if (pos === villain) return { pos, state: 'acted', label: `3-bet ${threeBet}`, amountBb: threeBet, committedBb: threeBet, live: true };
     return { pos, state: 'fold', label: 'fold', committedBb: blind, live: false };
   });
+  return [...seats, { pos: heroPos, state: 'hero', label: 'to act', committedBb: 0, live: true }];
 }

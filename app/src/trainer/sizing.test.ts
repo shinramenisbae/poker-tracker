@@ -66,9 +66,18 @@ describe('sizing/context', () => {
   it('vs-3bet UTG vs BTN: hero opened 2.5, BTN 3bet 7.5, EVERYONE else fold, pot 11.5, toCall 5, 4bet 16.5', () => {
     const ctx = buildContext('vs-3bet', 'UTG', 'BTN');
     const at = (p: string) => ctx.actionHistory.find(h => h.pos === p)!;
-    expect(at('UTG').state).toBe('hero');
+    // hero's seat cell shows the open he already made...
+    expect(at('UTG').state).toBe('hero-acted');
+    expect(at('UTG').label).toBe('raise 2.5');
     expect(at('UTG').committedBb).toBeCloseTo(2.5);
     expect(at('UTG').live).toBe(true);
+    // ...and the timeline ends with the action back on the hero.
+    expect(ctx.actionHistory).toHaveLength(7);
+    const last = ctx.actionHistory[ctx.actionHistory.length - 1];
+    expect(last.pos).toBe('UTG');
+    expect(last.state).toBe('hero');
+    expect(last.label).toBe('to act');
+    expect(last.committedBb).toBe(0); // no double-count in the pot or chip sprites
     expect(at('BTN').state).toBe('acted');
     expect(at('BTN').committedBb).toBeCloseTo(7.5);
     // every other seat folded, NOT pending
