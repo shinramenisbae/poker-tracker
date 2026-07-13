@@ -23,8 +23,14 @@ export interface BuyIn {
   id: string;
   amount: number;
   method: 'cash' | 'bank';
-  timestamp: number;
+  // ISO string from the API (server-side entry time); ms number in legacy data.
+  timestamp: number | string;
   notes: string;
+  isRebuy?: number | boolean;
+  // 'top-up' = added chips while still stacked; 'stacked' = lost the full stack.
+  rebuyType?: 'top-up' | 'stacked' | null;
+  // Optional hand they got stacked with, e.g. "AA" or "KK vs 76s".
+  stackedHand?: string | null;
 }
 
 export interface CashOut {

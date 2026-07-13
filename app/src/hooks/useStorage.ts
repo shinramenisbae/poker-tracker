@@ -188,12 +188,12 @@ export function useSessions() {
     playerId: string,
     amount: number,
     method: 'cash' | 'bank' = 'cash',
-    notes: string = ''
+    rebuy: { isRebuy?: boolean; rebuyType?: 'top-up' | 'stacked'; stackedHand?: string } = {}
   ) => {
     setIsLoading(true);
     setError(null);
     try {
-      const updatedSession = await apiAddBuyIn(sessionId, playerId, amount, method, notes);
+      const updatedSession = await apiAddBuyIn(sessionId, playerId, amount, method, rebuy);
       setSessions((prev) =>
         prev.map((session) =>
           session.id === sessionId ? updatedSession : session

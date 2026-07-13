@@ -2,6 +2,14 @@ import { useState } from 'react';
 import type { Player, BuyIn } from '../types';
 import { formatCurrency, getTotalBuyIn } from '../utils/calculations';
 
+// Entry time of a buy-in in local time, e.g. "9:42 PM". The API returns an ISO
+// string (server-side time of the moment it was logged); legacy data may be ms.
+function formatBuyInTime(ts: number | string): string {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
 interface BuyInsModalProps {
   player: Player;
   onUpdateBuyIn: (buyInId: string, amount: number, method: 'cash' | 'bank') => void;
@@ -127,6 +135,18 @@ export function BuyInsModal({
                       <span className="text-xs text-text-tertiary ml-2">
                         #{index + 1}
                       </span>
+                      <div className="text-xs text-text-tertiary mt-0.5">
+                        {formatBuyInTime(buyIn.timestamp) && (
+                          <span>logged {formatBuyInTime(buyIn.timestamp)}</span>
+                        )}
+                        {buyIn.rebuyType && (
+                          <span className="ml-2">
+                            · {buyIn.rebuyType === 'stacked'
+                              ? `stacked${buyIn.stackedHand ? ` (${buyIn.stackedHand})` : ''}`
+                              : 'top-up'}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex gap-1">
                       <button

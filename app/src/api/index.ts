@@ -62,12 +62,18 @@ export async function addPlayer(sessionId: string, player: Omit<Player, 'id'>): 
 }
 
 // Buy-in API
+export interface RebuyOptions {
+  isRebuy?: boolean;
+  rebuyType?: 'top-up' | 'stacked';
+  stackedHand?: string;
+}
+
 export async function addBuyIn(
   sessionId: string,
   playerId: string,
   amount: number,
   method: 'cash' | 'bank' = 'cash',
-  notes: string = ''
+  rebuy: RebuyOptions = {}
 ): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/players/${playerId}/buyins`, {
     method: 'POST',
@@ -77,7 +83,9 @@ export async function addBuyIn(
     body: JSON.stringify({
       amount,
       method,
-      notes,
+      isRebuy: rebuy.isRebuy ?? false,
+      rebuyType: rebuy.rebuyType,
+      stackedHand: rebuy.stackedHand,
       timestamp: Date.now(),
     }),
   });

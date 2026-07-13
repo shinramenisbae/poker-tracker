@@ -169,6 +169,16 @@ db.serialize(() => {
   db.run(`ALTER TABLE sessions ADD COLUMN discordThreadId TEXT`, (err) => {
     // Ignore error if column already exists
   });
+
+  // Migration: rebuy context. rebuyType is 'top-up' (added chips while still
+  // stacked) or 'stacked' (lost the full stack and re-bought); stackedHand is
+  // the optional hand they got stacked with (e.g. "AA", "KK vs 76s").
+  db.run(`ALTER TABLE buyIns ADD COLUMN rebuyType TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
+  db.run(`ALTER TABLE buyIns ADD COLUMN stackedHand TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
 });
 
 module.exports = db;
