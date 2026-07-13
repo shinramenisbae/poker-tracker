@@ -35,6 +35,30 @@ EOF
 
 (If a key already exists in `.env`, edit it instead of appending a duplicate.)
 
+### 1b. Streak roles (Running Hot / Running Cold)
+
+In Discord, create two roles — e.g. **🔥 Running Hot** and **🧊 Running Cold**
+(any color/name you like) — then copy their IDs and add:
+
+```bash
+cat >> /root/.openclaw/workspace/poker-tracker/bot/.env <<'EOF'
+DISCORD_HOT_ROLE_ID=<hot role id>
+DISCORD_COLD_ROLE_ID=<cold role id>
+EOF
+```
+
+Requirements for the role changes to work:
+- The **bot's own role must sit ABOVE both streak roles** in Server Settings →
+  Roles (Discord only lets a bot manage roles below its own).
+- The bot needs the **Manage Roles** permission.
+- A player only receives/loses roles if they're linked via `/paid` (the
+  `discord_links` mapping).
+
+Won your last 3 played sessions → hot role; lost your last 3 → cold role;
+broken streak → role removed. The results post gets a "📈 Streak watch"
+section either way — role IDs unset just skips the role changes. Restart the
+bot after editing `.env`.
+
 ---
 
 ## 2. Discord `applications.commands` scope
