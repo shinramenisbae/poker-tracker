@@ -479,7 +479,11 @@ app.post('/api/sessions/:id/players', (req, res) => {
 app.post('/api/sessions/:id/players/:playerId/buyins', (req, res) => {
   const sessionId = req.params.id;
   const playerId = req.params.playerId;
-  const { amount, isRebuy, method } = req.body;
+  const { amount, isRebuy, method, rebuyType, stackedHand } = req.body;
+  // Rebuy context (optional): 'top-up' = added chips while still stacked;
+  // 'stacked' = lost the whole stack. stackedHand is free text like "AA".
+  const rebuyTypeClean = rebuyType === 'top-up' || rebuyType === 'stacked' ? rebuyType : null;
+  const stackedHandClean = (typeof stackedHand === 'string' && stackedHand.trim()) || null;
 
   db.get('SELECT * FROM players WHERE id = ?', [playerId], (err, player) => {
     if (err) {
@@ -493,11 +497,11 @@ app.post('/api/sessions/:id/players/:playerId/buyins', (req, res) => {
     const now = new Date().toISOString();
 
     const stmt = db.prepare(`
-      INSERT INTO buyIns (id, playerId, amount, timestamp, isRebuy, method)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO buyIns (id, playerId, amount, timestamp, isRebuy, method, rebuyType, stackedHand)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    stmt.run(id, playerId, amount, now, isRebuy ? 1 : 0, method || 'cash', function(err) {
+    stmt.run(id, playerId, amount, now, isRebuy ? 1 : 0, method || 'cash', rebuyTypeClean, stackedHandClean, function(err) {
       if (err) {
         return res.status(500).json({ error: err.message });
       }
@@ -551,7 +555,7 @@ app.put('/api/sessions/:id/players/:playerId/buyins/:buyInId', (req, res) => {
   const sessionId = req.params.id;
   const playerId = req.params.playerId;
   const buyInId = req.params.buyInId;
-  const { amount, method } = req.body;
+  const { amount, method, rebuyType, stackedHand } = req.body;
 
   db.get('SELECT * FROM buyIns WHERE id = ? AND playerId = ?', [buyInId, playerId], (err, buyIn) => {
     if (err) {
@@ -561,13 +565,31 @@ app.put('/api/sessions/:id/players/:playerId/buyins/:buyInId', (req, res) => {
       return res.status(404).json({ error: 'Buy-in not found' });
     }
 
+    // Optional rebuy-context updates: undefined = keep, explicit null/'' =
+    // clear, valid enum value = set — anything else is a 400, NOT a silent
+    // clear (a set-intent typo like 'Stacked' must not destroy stored data).
+    // Never touches timestamp, so the creation-time audit trail is preserved.
+    let nextRebuyType;
+    if (rebuyType === undefined) nextRebuyType = buyIn.rebuyType;
+    else if (rebuyType === null || rebuyType === '') nextRebuyType = null;
+    else if (rebuyType === 'top-up' || rebuyType === 'stacked') nextRebuyType = rebuyType;
+    else return res.status(400).json({ error: "rebuyType must be 'top-up', 'stacked', or null" });
+
+    let nextStackedHand;
+    if (stackedHand === undefined) nextStackedHand = buyIn.stackedHand;
+    else if (stackedHand === null || stackedHand === '') nextStackedHand = null;
+    else if (typeof stackedHand === 'string') nextStackedHand = stackedHand.trim() || null;
+    else return res.status(400).json({ error: 'stackedHand must be a string or null' });
+
     const stmt = db.prepare(`
-      UPDATE buyIns SET amount = ?, method = ? WHERE id = ?
+      UPDATE buyIns SET amount = ?, method = ?, rebuyType = ?, stackedHand = ? WHERE id = ?
     `);
 
     stmt.run(
       amount !== undefined ? amount : buyIn.amount,
       method !== undefined ? method : buyIn.method,
+      nextRebuyType,
+      nextStackedHand,
       buyInId,
       function(err) {
         if (err) {

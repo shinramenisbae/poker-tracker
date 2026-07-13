@@ -26,6 +26,12 @@ export function SessionDetail() {
   const [customBuyInPlayer, setCustomBuyInPlayer] = useState<Player | null>(null);
   const [customBuyInAmount, setCustomBuyInAmount] = useState('');
   const [customBuyInMethod, setCustomBuyInMethod] = useState<'cash' | 'bank'>('cash');
+  // Rebuy prompt: any buy-in after a player's first opens a confirm step asking
+  // whether it's a top-up or a full-stack rebuy (optionally: with what hand).
+  // Doubles as double-tap protection on the quick +$ buttons.
+  const [rebuyPrompt, setRebuyPrompt] = useState<{ player: Player; amount: number; method: 'cash' | 'bank' } | null>(null);
+  const [rebuyType, setRebuyType] = useState<'top-up' | 'stacked'>('top-up');
+  const [stackedHand, setStackedHand] = useState('');
   const [editBuyInsPlayer, setEditBuyInsPlayer] = useState<Player | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -82,18 +88,56 @@ export function SessionDetail() {
     }
   };
 
-  const handleAddBuyIn = async (playerId: string, amount: number, method: 'cash' | 'bank' = 'cash') => {
-    if (actionLoading) return;
+  // Returns whether the buy-in was actually saved, so callers keep their modal
+  // (and the user's typed input) open on failure instead of closing as if it
+  // succeeded — a silently-unlogged rebuy is exactly the audit gap this
+  // feature exists to close.
+  const handleAddBuyIn = async (
+    playerId: string,
+    amount: number,
+    method: 'cash' | 'bank' = 'cash',
+    rebuy: { isRebuy?: boolean; rebuyType?: 'top-up' | 'stacked'; stackedHand?: string } = {}
+  ): Promise<boolean> => {
+    if (actionLoading) return false;
 
     setActionLoading(true);
     setActionError(null);
 
     try {
-      await addPlayerBuyIn(session.id, playerId, amount, method);
+      await addPlayerBuyIn(session.id, playerId, amount, method, rebuy);
+      return true;
     } catch {
       setActionError('Failed to add buy-in. Please try again.');
+      return false;
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // Quick +$ buttons: the first buy-in logs instantly; anything after that is a
+  // rebuy, so open the top-up/stacked prompt instead of logging immediately.
+  const handleQuickBuyIn = (player: Player, amount: number, method: 'cash' | 'bank') => {
+    if (player.buyIns.length === 0) {
+      handleAddBuyIn(player.id, amount, method);
+      return;
+    }
+    setRebuyType('top-up');
+    setStackedHand('');
+    setRebuyPrompt({ player, amount, method });
+  };
+
+  const confirmRebuy = async () => {
+    if (!rebuyPrompt || actionLoading) return;
+    const saved = await handleAddBuyIn(rebuyPrompt.player.id, rebuyPrompt.amount, rebuyPrompt.method, {
+      isRebuy: true,
+      rebuyType,
+      stackedHand: rebuyType === 'stacked' && stackedHand.trim() ? stackedHand.trim() : undefined,
+    });
+    // On failure, keep the prompt (and typed hand) open so the rebuy isn't
+    // silently dropped — the error banner explains what happened.
+    if (saved) {
+      setRebuyPrompt(null);
+      setStackedHand('');
     }
   };
 
@@ -119,9 +163,20 @@ export function SessionDetail() {
     const amount = parseFloat(customBuyInAmount);
     if (isNaN(amount) || amount <= 0) return;
 
-    await handleAddBuyIn(customBuyInPlayer.id, amount, customBuyInMethod);
-    setCustomBuyInPlayer(null);
-    setCustomBuyInAmount('');
+    // A custom amount after the first buy-in is a rebuy: carry the top-up/
+    // stacked choice made inline in the custom modal.
+    const isRebuy = customBuyInPlayer.buyIns.length > 0;
+    const saved = await handleAddBuyIn(customBuyInPlayer.id, amount, customBuyInMethod, isRebuy ? {
+      isRebuy: true,
+      rebuyType,
+      stackedHand: rebuyType === 'stacked' && stackedHand.trim() ? stackedHand.trim() : undefined,
+    } : {});
+    // Keep the modal (amount + hand intact) open on failure.
+    if (saved) {
+      setCustomBuyInPlayer(null);
+      setCustomBuyInAmount('');
+      setStackedHand('');
+    }
   };
 
   const handleUpdateBuyIn = async (playerId: string, buyInId: string, amount: number, method: 'cash' | 'bank') => {
@@ -258,10 +313,15 @@ export function SessionDetail() {
             <PlayerRow
               key={player.id}
               player={player}
-              onAddBuyIn={(amount, method) => handleAddBuyIn(player.id, amount, method)}
+              onAddBuyIn={(amount, method) => handleQuickBuyIn(player, amount, method)}
               onCashOut={() => setCashOutPlayer(player)}
               onEditBuyIns={() => setEditBuyInsPlayer(player)}
-              showCustomBuyIn={(method) => { setCustomBuyInPlayer(player); setCustomBuyInMethod(method); }}
+              showCustomBuyIn={(method) => {
+                setCustomBuyInPlayer(player);
+                setCustomBuyInMethod(method);
+                setRebuyType('top-up');
+                setStackedHand('');
+              }}
               disabled={actionLoading}
             />
           ))}
@@ -405,13 +465,55 @@ export function SessionDetail() {
               </div>
             </div>
 
+            {/* Rebuy context — only after the player's first buy-in */}
+            {customBuyInPlayer.buyIns.length > 0 && (
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-text-secondary mb-2">
+                  Rebuy type
+                </label>
+                <div className="flex gap-1 bg-bg-tertiary rounded-lg p-0.5 mb-3">
+                  <button
+                    onClick={() => setRebuyType('top-up')}
+                    className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                      rebuyType === 'top-up'
+                        ? 'bg-accent-primary text-white shadow-sm'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    Top-up
+                  </button>
+                  <button
+                    onClick={() => setRebuyType('stacked')}
+                    className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                      rebuyType === 'stacked'
+                        ? 'bg-accent-negative text-white shadow-sm'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                  >
+                    Got stacked
+                  </button>
+                </div>
+                {rebuyType === 'stacked' && (
+                  <input
+                    type="text"
+                    value={stackedHand}
+                    onChange={(e) => setStackedHand(e.target.value)}
+                    placeholder="Hand they lost with (optional), e.g. AA"
+                    className="input w-full"
+                  />
+                )}
+              </div>
+            )}
+
             <div className="flex gap-3">
               <button
                 onClick={() => {
                   setCustomBuyInPlayer(null);
                   setCustomBuyInAmount('');
+                  setStackedHand('');
                 }}
-                className="flex-1 btn-secondary"
+                disabled={actionLoading}
+                className="flex-1 btn-secondary disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -421,6 +523,79 @@ export function SessionDetail() {
                 className="flex-1 btn-primary disabled:opacity-50"
               >
                 {actionLoading ? 'Adding...' : 'Add Buy-in'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rebuy Prompt (quick +$ buttons after the first buy-in) */}
+      {rebuyPrompt && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <div className="bg-surface-primary w-full max-w-md sm:rounded-2xl rounded-t-2xl p-6">
+            <h2 className="text-xl font-semibold text-text-primary mb-2">
+              Rebuy — {formatCurrency(rebuyPrompt.amount)} {rebuyPrompt.method}
+            </h2>
+            <p className="text-text-secondary mb-4">For {rebuyPrompt.player.name}</p>
+
+            <div className="flex gap-1 bg-bg-tertiary rounded-lg p-0.5 mb-4">
+              <button
+                onClick={() => setRebuyType('top-up')}
+                disabled={actionLoading}
+                className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                  rebuyType === 'top-up'
+                    ? 'bg-accent-primary text-white shadow-sm'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Top-up
+              </button>
+              <button
+                onClick={() => setRebuyType('stacked')}
+                disabled={actionLoading}
+                className={`flex-1 py-2 rounded-md text-sm font-medium transition-colors ${
+                  rebuyType === 'stacked'
+                    ? 'bg-accent-negative text-white shadow-sm'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Got stacked
+              </button>
+            </div>
+
+            {rebuyType === 'stacked' && (
+              <div className="mb-4">
+                <input
+                  type="text"
+                  value={stackedHand}
+                  onChange={(e) => setStackedHand(e.target.value)}
+                  placeholder="Hand they lost with (optional), e.g. AA"
+                  className="input w-full"
+                  disabled={actionLoading}
+                />
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              {/* Cancel is disabled while the POST is in flight: a mid-flight
+                  "cancel" can't abort the request, so allowing it invites a
+                  re-tap and a duplicate buy-in (same pattern as CashOutModal). */}
+              <button
+                onClick={() => {
+                  setRebuyPrompt(null);
+                  setStackedHand('');
+                }}
+                disabled={actionLoading}
+                className="flex-1 btn-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRebuy}
+                disabled={actionLoading}
+                className="flex-1 btn-primary disabled:opacity-50"
+              >
+                {actionLoading ? 'Adding...' : 'Log Rebuy'}
               </button>
             </div>
           </div>
