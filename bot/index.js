@@ -27,6 +27,7 @@ import { accountsMapFromResponse } from './bank.js';
 import { calculateSettlements, identifyBankPlayer } from './settlement.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
+import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,6 +48,11 @@ const {
   // Hour (0-23) and timezone for the daily unpaid-debt reminder.
   PAYMENT_REMINDER_HOUR = '10',
   PAYMENT_REMINDER_TZ = 'Pacific/Auckland',
+  // Optional: role IDs for the 3-in-a-row streak roles. When set, the bot
+  // assigns/removes them as streaks start and break (players must be linked
+  // via /paid). Streak lines appear in results posts regardless.
+  DISCORD_HOT_ROLE_ID = '',
+  DISCORD_COLD_ROLE_ID = '',
 } = process.env;
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
@@ -734,10 +740,104 @@ async function deletePriorResultsPosts(thread, botUserId) {
   return deleted;
 }
 
+// -------- Hot/cold streak lines + roles --------
+
+const STREAK_LINES = {
+  hotStarted: [
+    (n, len) => `🔥 **${n}** has won ${len} in a row — officially RUNNING HOT. Someone check the deck.`,
+    (n, len) => `🔥 ${len} straight wins for **${n}**. The Running Hot role has been bestowed. Fear them.`,
+    (n, len) => `🔥 **${n}** hits ${len} in a row. It's not luck, it's a heater (it's luck).`,
+  ],
+  hotExtended: [
+    (n, len) => `🔥 **${n}** extends the heater to ${len} straight. Unsustainable. Probably.`,
+    (n, len) => `🔥 Still cooking: **${n}** makes it ${len} in a row. The table is scared.`,
+  ],
+  hotBroken: [
+    (n, len) => `🧯 Heater extinguished — **${n}**'s ${len}-win run ends tonight. Back to the mortal realm.`,
+    (n, len) => `🧯 **${n}** finally loses one. The ${len}-session heater is over; gravity remains undefeated.`,
+  ],
+  coldStarted: [
+    (n, len) => `🧊 **${n}** has lost ${len} in a row — RUNNING COLD. Thoughts and prayers.`,
+    (n, len) => `🧊 ${len} straight Ls for **${n}**. The Running Cold role has been earned. Condolences.`,
+    (n, len) => `🧊 **${n}** is officially running cold (${len} in a row). Have you tried winning instead?`,
+  ],
+  coldExtended: [
+    (n, len) => `🧊 **${n}** deepens the freeze: ${len} losses in a row. The ice age continues.`,
+    (n, len) => `🧊 Loss #${len} in a row for **${n}**. At this point it's a lifestyle.`,
+  ],
+  coldBroken: [
+    (n, len) => `🌤️ **${n}** finally books a win — the ${len}-loss cold streak is OVER. Spring has come.`,
+    (n, len) => `🌤️ The curse lifts: **${n}** snaps a ${len}-session skid. Scenes.`,
+  ],
+};
+
+function streakLine(t) {
+  const key = t.kind + t.event[0].toUpperCase() + t.event.slice(1); // e.g. hotStarted
+  const pool = STREAK_LINES[key] || [];
+  if (pool.length === 0) return '';
+  return pool[Math.floor(Math.random() * pool.length)](t.playerName, t.length);
+}
+
+// Compute streak transitions for this session and render the message section.
+// Failures degrade to "no section" — a streaks hiccup must never block results.
+async function buildStreakSection(session) {
+  try {
+    const sessions = await trackerGet('/sessions');
+    const transitions = computeStreakTransitions(sessions, session.id);
+    const lines = transitions.map(streakLine).filter(Boolean);
+    const text = lines.length ? `\n📈 **Streak watch**\n${lines.join('\n')}\n` : '';
+    return { text, transitions, sessions };
+  } catch (err) {
+    console.error('Streak computation failed:', err.message);
+    return { text: '', transitions: [], sessions: null };
+  }
+}
+
+// Assign/remove the hot/cold roles per the transitions. Only runs when this is
+// the LATEST completed session (a repost of an old session must not rewrite
+// today's roles) and only for players linked via /paid. Starting one streak
+// also clears the opposite role in case a past removal was missed. All role
+// ops are best-effort: a Discord permission error is logged, never thrown.
+async function applyStreakRoles(thread, transitions, sessions, sessionId) {
+  if (!DISCORD_HOT_ROLE_ID && !DISCORD_COLD_ROLE_ID) return;
+  if (transitions.length === 0 || !sessions) return;
+  if (!isLatestCompletedSession(sessions, sessionId)) return;
+  const guild = thread.guild;
+  if (!guild) return;
+
+  const links = await getDiscordLinks();
+  const nameToUser = {};
+  for (const [uid, name] of Object.entries(links)) {
+    if (!(name in nameToUser)) nameToUser[name] = uid;
+  }
+
+  for (const t of transitions) {
+    const roleId = t.kind === 'hot' ? DISCORD_HOT_ROLE_ID : DISCORD_COLD_ROLE_ID;
+    const oppositeId = t.kind === 'hot' ? DISCORD_COLD_ROLE_ID : DISCORD_HOT_ROLE_ID;
+    if (!roleId) continue;
+    const uid = nameToUser[t.playerName];
+    if (!uid) continue;
+    try {
+      const member = await guild.members.fetch(uid);
+      if (t.event === 'broken') {
+        await member.roles.remove(roleId);
+      } else {
+        await member.roles.add(roleId); // started or extended — idempotent
+        if (t.event === 'started' && oppositeId) {
+          await member.roles.remove(oppositeId).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error(`Streak role ${t.event} (${t.kind}) for ${t.playerName} failed:`, err.message);
+    }
+  }
+}
+
 async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
   const bankAccounts = await fetchBankAccounts();
-  const text = formatResultsMessage(session, results, bankAccounts);
+  const streaks = await buildStreakSection(session);
+  const text = formatResultsMessage(session, results, bankAccounts) + streaks.text;
 
   // Mention the poker role (if configured) so everyone gets pulled into the
   // thread. allowedMentions must explicitly list the role id or Discord
@@ -750,6 +850,8 @@ async function postResultsMessage(thread, session) {
   } else {
     await thread.send({ content: text, allowedMentions: { parse: [] } });
   }
+
+  await applyStreakRoles(thread, streaks.transitions, streaks.sessions, session.id);
 }
 
 // -------- /paid slash command --------
