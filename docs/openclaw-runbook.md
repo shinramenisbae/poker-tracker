@@ -84,7 +84,7 @@ journalctl -u tribe-poker-bot.service -n 30 --no-pager
 ```
 
 Expect log lines:
-- `Registered /paid and /unpaid slash commands.`
+- `Registered /paid, /unpaid and /link slash commands.`
 - `Next payment reminder in N.Nh (10:00 Pacific/Auckland).`
 
 Global slash commands can take a few minutes to first appear in Discord.
@@ -190,9 +190,10 @@ GitHub Actions page (Re-run jobs) or just push a new commit.
 
 ## Daily usage reference (for players)
 
+- Link yourself once with `/link player:<your name>` (anywhere in the server) so
+  reminders can ping you and streak roles apply. Link someone else with
+  `/link player:<name> user:@them`.
 - In a session results thread, run `/paid` once you've sent your money.
-  - First time: `/paid player:<your name>` so the bot links you. After that,
-    bare `/paid` works.
   - The bank player can mark anyone: `/paid player:<name>`.
 - Every day at 10am NZ time the bot pings anyone who still owes a bank transfer,
   one message per session thread, until everyone's marked paid.
