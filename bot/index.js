@@ -878,6 +878,23 @@ const UNPAID_COMMAND = new SlashCommandBuilder()
   .setName('unpaid')
   .setDescription('Show who still owes the bank player for this session.');
 
+// Standalone linking — /paid only links as a side effect of marking a debt, so
+// players with nothing to pay (winners, or people who haven't played yet) had
+// no way to get linked and were invisible to reminder pings and streak roles.
+const LINK_COMMAND = new SlashCommandBuilder()
+  .setName('link')
+  .setDescription('Link a Discord user to a tracker player (for reminders, /paid, and streak roles).')
+  .addStringOption((o) =>
+    o.setName('player')
+      .setDescription('Tracker player name, e.g. Alvin')
+      .setRequired(true)
+  )
+  .addUserOption((o) =>
+    o.setName('user')
+      .setDescription('Discord user to link (defaults to you).')
+      .setRequired(false)
+  );
+
 async function registerSlashCommands() {
   if (!DISCORD_APP_ID) {
     console.warn('DISCORD_APP_ID unset — skipping slash command registration.');
@@ -886,9 +903,9 @@ async function registerSlashCommands() {
   try {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     await rest.put(Routes.applicationCommands(DISCORD_APP_ID), {
-      body: [PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON()],
+      body: [PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON(), LINK_COMMAND.toJSON()],
     });
-    console.log('Registered /paid and /unpaid slash commands.');
+    console.log('Registered /paid, /unpaid and /link slash commands.');
   } catch (err) {
     console.error('Slash command registration failed:', err.message);
   }
@@ -1029,6 +1046,55 @@ async function handleUnpaidCommand(interaction) {
     `💸 **Still unpaid — ${session.date}**\n${lines.join('\n')}\n` +
     `_Total outstanding: $${total.toFixed(2)}. Run \`/paid\` once you've sent it._`;
   return interaction.reply({ content, allowedMentions: { users: mentions } });
+}
+
+// /link — connect a Discord user to a tracker player, no payment required.
+// Usable anywhere in the server (no session-thread context needed).
+async function handleLinkCommand(interaction) {
+  const named = (interaction.options.getString('player') || '').trim();
+  const targetUser = interaction.options.getUser('user') || interaction.user;
+
+  // Resolve case-insensitively against the tracker's canonical player list so
+  // a typo can't create a link to a player that doesn't exist.
+  let canonical;
+  try {
+    canonical = (await trackerGet('/alias-mappings')).canonicalPlayers || [];
+  } catch (err) {
+    return interaction.reply({
+      content: `⚠️ Couldn't fetch the player list from the tracker: ${err.message}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+  const playerName = canonical.find((n) => n.toLowerCase() === named.toLowerCase());
+  if (!playerName) {
+    return interaction.reply({
+      content: `⚠️ No player named **${named}** in the tracker. Check the exact name at ${TRACKER_UI_BASE}/#/aliases.`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const links = await getDiscordLinks();
+  const previous = links[targetUser.id];
+  try {
+    await linkDiscordUser(targetUser.id, playerName);
+  } catch (err) {
+    return interaction.reply({
+      content: `⚠️ Failed to save the link: ${err.message}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  const who = targetUser.id === interaction.user.id ? 'You are' : `<@${targetUser.id}> is`;
+  let msg = `🔗 ${who} now linked to **${playerName}** — payment reminders and streak roles will find them.`;
+  if (previous && previous !== playerName) {
+    msg += ` _(was linked to **${previous}**)_`;
+  }
+  // Flag a likely mistake: someone ELSE is already linked to this same player.
+  const otherUid = Object.keys(links).find((uid) => uid !== targetUser.id && links[uid] === playerName);
+  if (otherUid) {
+    msg += `\n⚠️ Heads up: <@${otherUid}> is also linked to **${playerName}** — if that's stale, re-link them with \`/link\`.`;
+  }
+  return interaction.reply({ content: msg, allowedMentions: { parse: [] } });
 }
 
 // -------- Daily unpaid-debt reminder --------
@@ -1190,7 +1256,7 @@ const client = new Client({
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const handlers = { paid: handlePaidCommand, unpaid: handleUnpaidCommand };
+  const handlers = { paid: handlePaidCommand, unpaid: handleUnpaidCommand, link: handleLinkCommand };
   const handler = handlers[interaction.commandName];
   if (!handler) return;
   try {

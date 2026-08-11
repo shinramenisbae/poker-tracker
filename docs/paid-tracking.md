@@ -25,6 +25,16 @@ still owes at a configured time each day (default 10am NZ time).
   total outstanding. @mentions linked users; falls back to plain names. Replies
   "everyone has paid" when nothing is outstanding. Read-only — changes nothing.
 
+- **`/link player:<name> [user:@someone]`** (usable anywhere in the server):
+  connects a Discord user to a tracker player with **no payment involved** —
+  the clean way to link, since `/paid` only links as a side effect of marking a
+  debt (a player who owes nothing couldn't be linked, so reminders and streak
+  roles couldn't find them). `user:` defaults to yourself. The name is matched
+  case-insensitively against the tracker's canonical player list, so typos are
+  rejected instead of creating a link to a nonexistent player. Re-linking is
+  allowed; the reply notes the previous mapping and warns if another Discord
+  user is already linked to the same player.
+
 - **Daily reminder** (`PAYMENT_REMINDER_HOUR` in `PAYMENT_REMINDER_TZ`, default
   10:00 `Pacific/Auckland`): scans every session with unpaid debtors and posts
   one reminder per thread, @mentioning the linked Discord users (falling back to
