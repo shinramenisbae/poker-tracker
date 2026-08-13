@@ -8,16 +8,17 @@ import {
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
-import { announceSessionToDiscord } from '../api';
+import { announceSessionToDiscord, reannounceSessionToDiscord } from '../api';
 
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, isLoading } = useSessions();
+  const { getSession, isLoading, refreshSessions } = useSessions();
   const [announceState, setAnnounceState] = useState<
     | { kind: 'idle' }
     | { kind: 'posting' }
-    | { kind: 'done'; threadId?: string; alreadyAnnouncedThreadId?: string }
+    | { kind: 'reposting' }
+    | { kind: 'done'; threadId?: string; alreadyAnnouncedThreadId?: string; reposted?: boolean }
     | { kind: 'error'; message: string }
   >({ kind: 'idle' });
 
@@ -35,6 +36,26 @@ export function Results() {
     try {
       const result = await announceSessionToDiscord(session.id);
       setAnnounceState({ kind: 'done', threadId: result.threadId, alreadyAnnouncedThreadId: result.alreadyAnnouncedThreadId });
+    } catch (err) {
+      setAnnounceState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // Deletes the old Discord thread and posts a fresh one with the current
+  // numbers — for when a value turned out to be wrong after posting.
+  async function handleRepost() {
+    if (!session) return;
+    if (!confirm(
+      'Delete the existing Discord thread and post a corrected one?\n\n' +
+      'The old thread and everything in it is permanently removed.'
+    )) return;
+    setAnnounceState({ kind: 'reposting' });
+    try {
+      const result = await reannounceSessionToDiscord(session.id);
+      // Pull the new discordThreadId into the cached session so the button
+      // state reflects reality without a manual page refresh.
+      await refreshSessions();
+      setAnnounceState({ kind: 'done', threadId: result.threadId, reposted: true });
     } catch (err) {
       setAnnounceState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
     }
@@ -134,6 +155,8 @@ export function Results() {
             <div className="bg-green-500/10 border border-green-500/40 text-green-300 rounded px-3 py-2 text-sm text-center">
               {announceState.kind === 'done' && announceState.alreadyAnnouncedThreadId
                 ? `Already announced earlier (thread ${announceState.alreadyAnnouncedThreadId}).`
+                : announceState.kind === 'done' && announceState.reposted
+                ? `Old thread deleted — corrected results posted (thread ${announceState.threadId}).`
                 : announceState.kind === 'done'
                 ? `Posted to Discord (thread ${announceState.threadId}).`
                 : `Already announced (thread ${previousThreadId}).`}
@@ -147,11 +170,21 @@ export function Results() {
           <div className="flex gap-2">
             <button
               onClick={handleAnnounce}
-              disabled={announceState.kind === 'posting' || announceState.kind === 'done' || !!previousThreadId}
+              disabled={announceState.kind === 'posting' || announceState.kind === 'reposting' || announceState.kind === 'done' || !!previousThreadId}
               className="flex-1 btn-primary disabled:opacity-50"
             >
               {announceState.kind === 'posting' ? 'Posting…' : previousThreadId ? '✓ Posted to Discord' : '📣 Post to Discord'}
             </button>
+            {(previousThreadId || (announceState.kind === 'done' && announceState.threadId)) && (
+              <button
+                onClick={handleRepost}
+                disabled={announceState.kind === 'posting' || announceState.kind === 'reposting'}
+                className="flex-1 btn-secondary disabled:opacity-50"
+                title="Delete the posted thread and post the corrected results"
+              >
+                {announceState.kind === 'reposting' ? 'Reposting…' : '♻️ Fix & repost'}
+              </button>
+            )}
             <button
               onClick={() => navigate('/')}
               className="flex-1 btn-secondary"
