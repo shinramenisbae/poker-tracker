@@ -4,19 +4,27 @@ import { formatCurrency } from '../utils/calculations';
 interface CashOutModalProps {
   playerName: string;
   currentBuyIn: number;
+  /** Existing cash-out, so editing starts from the stored value instead of blank. */
+  initialAmount?: number | null;
   onConfirm: (amount: number) => void;
   onCancel: () => void;
   isLoading?: boolean;
+  /** Surfaced in-modal: the page's error banner sits behind this overlay. */
+  error?: string | null;
 }
 
 export function CashOutModal({
   playerName,
   currentBuyIn,
+  initialAmount = null,
   onConfirm,
   onCancel,
   isLoading = false,
+  error = null,
 }: CashOutModalProps) {
-  const [amount, setAmount] = useState('');
+  // Seeded once per mount; SessionDetail keys this modal by player id, so
+  // opening it for a different player remounts with that player's value.
+  const [amount, setAmount] = useState(initialAmount != null ? String(initialAmount) : '');
 
   const handleConfirm = () => {
     if (isLoading) return;
@@ -26,17 +34,31 @@ export function CashOutModal({
     }
   };
 
-  const quickAmounts = [0, currentBuyIn, currentBuyIn * 2];
+  // De-duplicated: with a $0 buy-in all three shortcuts collapse to 0, which
+  // also produced duplicate React keys.
+  const quickAmounts = [...new Set([0, currentBuyIn, currentBuyIn * 2])];
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
       <div className="bg-surface-primary w-full max-w-md sm:rounded-2xl rounded-t-2xl p-6 animate-in slide-in-from-bottom">
         <h2 className="text-xl font-semibold text-text-primary mb-2">
-          Cash Out {playerName}
+          {initialAmount != null ? 'Edit Cash Out' : 'Cash Out'} {playerName}
         </h2>
-        <p className="text-text-secondary mb-6">
+        <p className="text-text-secondary mb-2">
           Total buy-in: {formatCurrency(currentBuyIn)}
         </p>
+        {initialAmount != null && (
+          <p className="text-text-tertiary text-sm mb-6">
+            Currently cashed out for {formatCurrency(initialAmount)}
+          </p>
+        )}
+        {initialAmount == null && <div className="mb-6" />}
+
+        {error && (
+          <div className="mb-4 p-3 rounded-lg bg-accent-negative/10 border border-accent-negative/20">
+            <p className="text-sm text-accent-negative">⚠️ {error}</p>
+          </div>
+        )}
 
         <div className="mb-6">
           <label className="block text-sm font-medium text-text-secondary mb-2">
