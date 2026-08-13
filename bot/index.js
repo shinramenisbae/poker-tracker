@@ -1166,13 +1166,26 @@ function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function buildReminderMessage({ session, unpaidLines, bankMention }) {
+// The bank player's payment details, so debtors can pay straight from the
+// reminder instead of scrolling back to the original results post.
+function bankDetailLines(bankName, bankInfo) {
+  if (!bankInfo || (!bankInfo.displayName && !bankInfo.account)) {
+    return `   _(no account on file — ask ${bankName} for their details)_`;
+  }
+  const lines = [];
+  if (bankInfo.displayName) lines.push(`   ${bankInfo.displayName}`);
+  if (bankInfo.account) lines.push(`   \`${bankInfo.account}\``);
+  return lines.join('\n');
+}
+
+function buildReminderMessage({ session, unpaidLines, bankMention, bankName, bankInfo }) {
   const reason = pickRandom(BANK_BEGGAR_REASONS);
   const footer = pickRandom(FOOTER_SNARKS);
   return (
     `⏰ **Payment reminder — ${session.date}**\n` +
     `${unpaidLines.join('\n')}\n` +
     `\n🏦 ${bankMention} ${reason}\n` +
+    `${bankDetailLines(bankName, bankInfo)}\n` +
     `\n${footer}`
   );
 }
@@ -1181,9 +1194,10 @@ function buildReminderMessage({ session, unpaidLines, bankMention }) {
 // that session is processed (and a missing session id throws). Always throws on
 // failure so HTTP callers can surface errors; the daily timer wraps + swallows.
 async function runPaymentReminders({ sessionId = null } = {}) {
-  const [allSessions, links] = await Promise.all([
+  const [allSessions, links, bankAccounts] = await Promise.all([
     trackerGet('/sessions'),
     getDiscordLinks(),
+    fetchBankAccounts(), // returns {} on failure → "no account on file" fallback
   ]);
   const sessions = sessionId ? allSessions.filter((s) => s.id === sessionId) : allSessions;
   if (sessionId && sessions.length === 0) {
@@ -1226,7 +1240,13 @@ async function runPaymentReminders({ sessionId = null } = {}) {
     if (bankUid) mentions.push(bankUid);
     const bankMention = bankUid ? `<@${bankUid}>` : `**${bankName}**`;
 
-    const content = buildReminderMessage({ session, unpaidLines, bankMention });
+    const content = buildReminderMessage({
+      session,
+      unpaidLines,
+      bankMention,
+      bankName,
+      bankInfo: bankAccounts[bankName],
+    });
     await thread.send({ content, allowedMentions: { users: mentions } });
     reminded.push(session.id);
   }
