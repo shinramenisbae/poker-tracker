@@ -65,6 +65,13 @@ export function SessionDetail() {
   const totals = getSessionTotals(session);
   const allCashedOut = session.players.length > 0 && session.players.every((p) => p.cashOut !== null);
 
+  // Re-resolve the cash-out target from the live session on every render, so the
+  // modal reflects the latest stored cash-out (the same pattern the buy-ins
+  // modal already uses). `cashOutPlayer` is only a handle to which row is open.
+  const cashOutTarget = cashOutPlayer
+    ? session.players.find((p) => p.id === cashOutPlayer.id) ?? cashOutPlayer
+    : null;
+
   const handleAddPlayer = async () => {
     if (!newPlayerName.trim() || actionLoading) return;
 
@@ -220,6 +227,9 @@ export function SessionDetail() {
       navigate(`/session/${session.id}/results`);
     } catch {
       setActionError('Failed to end session. Please try again.');
+    } finally {
+      // Was only cleared on the error path; on success the page relied on
+      // navigate() unmounting it, so any nav hiccup left it stuck "Processing…".
       setActionLoading(false);
     }
   };
@@ -405,14 +415,20 @@ export function SessionDetail() {
         </div>
       )}
 
-      {/* Cash Out Modal */}
-      {cashOutPlayer && (
+      {/* Cash Out Modal — always driven off the LIVE player from session.players,
+          never the object captured when the button was tapped, so re-opening
+          after an edit shows the stored value rather than stale/blank data.
+          Keyed by player id so the amount field re-seeds per player. */}
+      {cashOutTarget && (
         <CashOutModal
-          playerName={cashOutPlayer.name}
-          currentBuyIn={getTotalBuyIn(cashOutPlayer)}
-          onConfirm={(amount) => handleCashOut(cashOutPlayer.id, amount)}
-          onCancel={() => setCashOutPlayer(null)}
+          key={cashOutTarget.id}
+          playerName={cashOutTarget.name}
+          currentBuyIn={getTotalBuyIn(cashOutTarget)}
+          initialAmount={cashOutTarget.cashOut?.amount ?? null}
+          onConfirm={(amount) => handleCashOut(cashOutTarget.id, amount)}
+          onCancel={() => { setCashOutPlayer(null); setActionError(null); }}
           isLoading={actionLoading}
+          error={actionError}
         />
       )}
 
