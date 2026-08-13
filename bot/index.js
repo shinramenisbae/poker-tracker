@@ -1340,6 +1340,67 @@ await client.login(DISCORD_TOKEN);
 const app = express();
 app.use(express.json());
 
+// Create the results thread for a session and post into it. Shared by
+// /announce and /reannounce so both produce an identical thread + message.
+async function announceSession(session) {
+  const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    throw new Error(`Channel ${DISCORD_CHANNEL_ID} not a text channel`);
+  }
+
+  const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
+  const thread = await channel.threads.create({
+    name: threadName,
+    autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+    reason: 'Posted from poker tracker (in-person announcement)',
+  });
+  await postResultsMessage(thread, session);
+
+  // Mark session as announced via the dedicated column (don't touch user's notes).
+  await trackerPut(`/sessions/${session.id}`, { discordThreadId: thread.id });
+  return { threadId: thread.id, threadName };
+}
+
+// Delete a session's results thread and clear the tracker's announcement
+// markers, so the session can be posted again from scratch (used when the
+// numbers were wrong and the posted thread is now misleading).
+//
+// Two things matter here:
+//   1. NEVER delete anything that isn't a thread under the watched channel — a
+//      stale/incorrect id must not be able to take out the channel itself.
+//   2. Clear the tracker state even when the thread is already gone (deleted by
+//      hand in Discord), otherwise the session stays permanently "announced"
+//      and can never be re-posted.
+async function unannounceSession(session) {
+  const threadId = session.discordThreadId
+    || ((session.notes || '').match(/threadId=(\d+)/) || [])[1]
+    || null;
+
+  let deleted = false;
+  let threadMissing = false;
+  if (threadId) {
+    const thread = await client.channels.fetch(threadId).catch(() => null);
+    if (thread && thread.isThread() && thread.parentId === DISCORD_CHANNEL_ID) {
+      await thread.delete('Removed from the poker tracker for a corrected repost');
+      deleted = true;
+    } else {
+      threadMissing = true; // already gone, or not a thread we own
+    }
+  }
+
+  // Clear the column AND the legacy notes marker — the /announce guard and the
+  // Results page both treat that marker as "already announced", so leaving it
+  // behind would block the re-post.
+  const update = { discordThreadId: null };
+  const notes = session.notes || '';
+  if (/Announced on Discord \(threadId=\d+\)/.test(notes)) {
+    update.notes = notes.replace(/\s*Announced on Discord \(threadId=\d+\)\s*/g, ' ').trim();
+  }
+  await trackerPut(`/sessions/${session.id}`, update);
+
+  return { threadId, deleted, threadMissing };
+}
+
 app.post('/announce/:sessionId', async (req, res) => {
   const sessionId = req.params.sessionId;
   try {
@@ -1354,25 +1415,48 @@ app.post('/announce/:sessionId', async (req, res) => {
       return res.json({ ok: true, alreadyAnnouncedThreadId: legacyMarker[1] });
     }
 
-    const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      return res.status(500).json({ error: `Channel ${DISCORD_CHANNEL_ID} not a text channel` });
-    }
-
-    const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
-    const thread = await channel.threads.create({
-      name: threadName,
-      autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-      reason: 'Posted from poker tracker (in-person announcement)',
-    });
-    await postResultsMessage(thread, session);
-
-    // Mark session as announced via the dedicated column (don't touch user's notes).
-    await trackerPut(`/sessions/${sessionId}`, { discordThreadId: thread.id });
-
-    res.json({ ok: true, threadId: thread.id, threadName });
+    const { threadId, threadName } = await announceSession(session);
+    res.json({ ok: true, threadId, threadName });
   } catch (err) {
     console.error('announce error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// POST /unannounce/:sessionId — delete the posted thread and clear the markers,
+// leaving the session postable again. Safe when nothing was announced.
+app.post('/unannounce/:sessionId', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    const session = await trackerGet(`/sessions/${sessionId}`);
+    const result = await unannounceSession(session);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('unannounce error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// POST /reannounce/:sessionId — delete the old thread and post a fresh one in a
+// single call. Done bot-side so the UI can't half-fail between two requests,
+// and the session is re-fetched in between so the new post carries the
+// corrected numbers (the whole point of reposting).
+app.post('/reannounce/:sessionId', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    const before = await trackerGet(`/sessions/${sessionId}`);
+    const removed = await unannounceSession(before);
+    const fresh = await trackerGet(`/sessions/${sessionId}`);
+    const { threadId, threadName } = await announceSession(fresh);
+    res.json({
+      ok: true,
+      threadId,
+      threadName,
+      previousThreadId: removed.threadId,
+      deletedPrevious: removed.deleted,
+    });
+  } catch (err) {
+    console.error('reannounce error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
 });

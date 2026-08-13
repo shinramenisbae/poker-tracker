@@ -1448,19 +1448,38 @@ app.delete('/api/players/:name', (req, res) => {
 // Note: avoid port 6000 (X11) and other unsafe ports on Node's undici blocklist —
 // fetch will fail with "bad port". Default 6300 matches the bot's .env.example.
 const BOT_BASE = process.env.BOT_BASE || 'http://127.0.0.1:6300';
-app.post('/api/sessions/:id/announce-discord', async (req, res) => {
-  try {
-    const botRes = await fetch(`${BOT_BASE}/announce/${encodeURIComponent(req.params.id)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const body = await botRes.json().catch(() => ({}));
-    if (!botRes.ok) return res.status(502).json({ error: `Bot returned ${botRes.status}`, details: body });
-    res.json(body);
-  } catch (err) {
-    res.status(502).json({ error: `Could not reach bot at ${BOT_BASE}: ${err.message}` });
-  }
-});
+
+// Shared forwarder for the bot's localhost endpoints.
+function forwardToBot(botPath) {
+  return async (req, res) => {
+    try {
+      const botRes = await fetch(`${BOT_BASE}${botPath(req)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await botRes.json().catch(() => ({}));
+      if (!botRes.ok) return res.status(502).json({ error: `Bot returned ${botRes.status}`, details: body });
+      res.json(body);
+    } catch (err) {
+      res.status(502).json({ error: `Could not reach bot at ${BOT_BASE}: ${err.message}` });
+    }
+  };
+}
+
+app.post('/api/sessions/:id/announce-discord', forwardToBot(
+  (req) => `/announce/${encodeURIComponent(req.params.id)}`
+));
+
+// Delete the posted thread and post a corrected one (used when a value was
+// wrong after the session was already announced).
+app.post('/api/sessions/:id/reannounce-discord', forwardToBot(
+  (req) => `/reannounce/${encodeURIComponent(req.params.id)}`
+));
+
+// Delete the posted thread and clear the markers, without re-posting.
+app.post('/api/sessions/:id/unannounce-discord', forwardToBot(
+  (req) => `/unannounce/${encodeURIComponent(req.params.id)}`
+));
 
 app.listen(PORT, () => {
   console.log(`Poker Tracker backend running on port ${PORT}`);

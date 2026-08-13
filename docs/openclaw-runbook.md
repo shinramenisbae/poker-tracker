@@ -74,6 +74,14 @@ Also ensure the bot can mention the Poker role: either the role's
 "Allow anyone to @mention this role" is on, or the bot has the
 "Mention @everyone, @here, and All Roles" permission.
 
+### 2b. Manage Threads permission (for "Fix & repost")
+
+The Results page's **♻️ Fix & repost** button deletes the posted results thread
+and posts a corrected one. Deleting a thread needs the **Manage Threads**
+permission on the bot's role in the watched channel. Without it the delete
+fails with `DiscordAPIError[50013] Missing Permissions`, which is surfaced in
+the red banner on the Results page (it is not swallowed).
+
 ---
 
 ## 3. Restart the bot and verify

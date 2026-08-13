@@ -234,6 +234,22 @@ export async function announceSessionToDiscord(sessionId: string): Promise<Annou
   return handleResponse<AnnounceResult>(response);
 }
 
+export interface ReannounceResult {
+  ok: true;
+  threadId: string;
+  threadName: string;
+  previousThreadId: string | null;
+  deletedPrevious: boolean;
+}
+// Deletes the previously posted thread and posts a fresh, corrected one.
+export async function reannounceSessionToDiscord(sessionId: string): Promise<ReannounceResult> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/reannounce-discord`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return handleResponse<ReannounceResult>(response);
+}
+
 // Hand-log / all-in EV API
 export interface EvHandPoint {
   actualNet: number;
