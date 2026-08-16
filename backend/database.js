@@ -1,7 +1,10 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
-const dbPath = path.join(__dirname, 'poker.db');
+// Defaults to the repo-local DB. Override with POKER_DB to run a second,
+// fully isolated instance from the same checkout (same name the backup script
+// already uses, so backups follow the override).
+const dbPath = process.env.POKER_DB || path.join(__dirname, 'poker.db');
 const db = new sqlite3.Database(dbPath);
 
 db.serialize(() => {

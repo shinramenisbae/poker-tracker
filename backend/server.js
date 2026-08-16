@@ -5,7 +5,7 @@ const path = require('path');
 const db = require('./database');
 
 const app = express();
-const PORT = 5001;
+const PORT = Number(process.env.PORT) || 5001;
 
 // --- Alias seeding (one-shot on first start of an empty table) ---
 const ALIAS_SEED_PATH = path.join(__dirname, 'aliases-seed.json');
@@ -106,8 +106,15 @@ async function fetchSheetCSV(sheetName) {
   return parseCSV(text);
 }
 
+// Comma-separated CORS_ORIGINS overrides these (a second instance serves a
+// different hostname); unset keeps the original allow-list.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: [
+  origin: CORS_ORIGINS.length > 0 ? CORS_ORIGINS : [
     'https://srv1346724.hstgr.cloud',
     'http://76.13.182.206:5000',
   ],
