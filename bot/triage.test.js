@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyAttachment, attachmentTrigger } from './triage.js';
+import { classifyAttachment, attachmentTrigger, visionEnabled } from './triage.js';
 
 test('classifyAttachment: ledger CSV by filename prefix', () => {
   assert.equal(classifyAttachment({ name: 'ledger_pglKlW.csv' }), 'ledger');
@@ -57,4 +57,38 @@ test('attachmentTrigger: ledger + hand log together → upload (ledger wins)', (
 test('attachmentTrigger: chatter / unrelated → null (the bug fix)', () => {
   assert.equal(attachmentTrigger([]), null);
   assert.equal(attachmentTrigger(['other']), null);
+});
+
+// --- screenshot import switched off ---
+//
+// Vision is the fallback for threads with no ledger CSV. With no Gemini key it
+// can't run, and retrying it per-thread on every restart is just error spam and
+// a slow startup scan. Off, an image is no longer something the bot can act on.
+
+test('visionEnabled: on when a key is configured', () => {
+  assert.equal(visionEnabled({ GEMINI_API_KEY: 'abc123' }), true);
+});
+
+test('visionEnabled: off when the key is missing or blank', () => {
+  assert.equal(visionEnabled({}), false);
+  assert.equal(visionEnabled({ GEMINI_API_KEY: '' }), false);
+  assert.equal(visionEnabled({ GEMINI_API_KEY: '   ' }), false);
+});
+
+test('attachmentTrigger: with vision off, an image alone is not actionable', () => {
+  assert.equal(attachmentTrigger(['image'], { vision: false }), null);
+});
+
+test('attachmentTrigger: with vision off, a hand log beside an image still attaches', () => {
+  // The hand log is parsed locally, so it must not be lost with the image.
+  assert.equal(attachmentTrigger(['image', 'handlog'], { vision: false }), 'handlog');
+});
+
+test('attachmentTrigger: with vision off, a ledger CSV still imports', () => {
+  assert.equal(attachmentTrigger(['ledger'], { vision: false }), 'upload');
+  assert.equal(attachmentTrigger(['ledger', 'image'], { vision: false }), 'upload');
+});
+
+test('attachmentTrigger: vision defaults to on, preserving existing behaviour', () => {
+  assert.equal(attachmentTrigger(['image']), 'upload');
 });

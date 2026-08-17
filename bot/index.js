@@ -29,7 +29,7 @@ import express from 'express';
 import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags, PermissionFlagsBits,
   ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
 import { GoogleGenAI, Type } from '@google/genai';
-import { classifyAttachment, attachmentTrigger } from './triage.js';
+import { classifyAttachment, attachmentTrigger, visionEnabled } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
 import { calculateSettlements, identifyBankPlayer } from './settlement.js';
@@ -73,7 +73,7 @@ const {
 // Bootstrap-only: the bot can't log in without these. Tracker URLs come from
 // the registry (GUILD_TRACKERS, or the legacy TRACKER_API_BASE pair), and
 // everything Discord-side is set per server with /setup.
-for (const [k, v] of Object.entries({ DISCORD_TOKEN, GEMINI_API_KEY })) {
+for (const [k, v] of Object.entries({ DISCORD_TOKEN })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
 }
 
@@ -177,7 +177,14 @@ async function refreshSettings() {
   return settings();
 }
 
-const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+// Screenshot import is optional. Ledger and hand-log CSVs are parsed locally
+// and are unaffected; without a key the bot simply stops treating images as
+// importable, rather than failing on each one at every startup scan.
+const VISION = visionEnabled(process.env);
+if (!VISION) {
+  console.log('Screenshot import disabled (no GEMINI_API_KEY). Ledger and hand-log CSVs still import.');
+}
+const genai = VISION ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 // -------- in-memory caches (rebuilt on restart, that's fine) --------
 const imageClassificationCache = new Map(); // url -> {type, rows}
@@ -613,7 +620,7 @@ async function processThreadUnlocked(thread, trigger) {
 
   // Fall back to OCR if no CSV or CSV unusable.
   if (ledgerRows.length === 0) {
-    if (images.length === 0) return;
+    if (!VISION || images.length === 0) return;
     for (const img of images) {
       const result = await classifyImage(img.url);
       if (result.type === 'online_ledger') ledgerRows.push(...(result.rows || []));
@@ -1797,7 +1804,7 @@ client.on('messageCreate', async (msg) => {
       // "lol", @mentions) must not trigger a re-import or hand-log re-parse —
       // that was the duplicate-session bug.
       const kinds = [...msg.attachments.values()].map(classifyAttachment);
-      const trigger = attachmentTrigger(kinds);
+      const trigger = attachmentTrigger(kinds, { vision: VISION });
       if (trigger) {
         await processThread(ch, trigger);
       } else if (await latestBotStatusIsBlock(ch, client.user.id)) {
