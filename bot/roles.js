@@ -74,6 +74,34 @@ function canAssign(role, botHighestPosition) {
 }
 
 /**
+ * Which of these roles the bot can actually hand out, judged against a SINGLE
+ * snapshot of the role list.
+ *
+ * Taking the bot's position as a separate argument is what went wrong the first
+ * time: creating a role inserts it at the bottom and shifts everything above it
+ * up, the bot's own role included, so a position read before creating is stale
+ * by the time the new roles are checked. Three roles genuinely below the bot
+ * were reported as sitting above it. Deriving both sides from one array makes
+ * that mistake unrepresentable — pass the roles as they are NOW.
+ *
+ * Anything missing from the snapshot is refused rather than assumed fine.
+ *
+ * @param {Array<{id: string, position: number}>} allRoles one consistent snapshot
+ * @param {string} botRoleId the bot's highest role
+ * @param {string[]} roleIds roles to judge
+ * @returns {Map<string, boolean>}
+ */
+function assignability(allRoles = [], botRoleId, roleIds = []) {
+  const positions = new Map(allRoles.map((r) => [r.id, Number(r.position)]));
+  const botTop = positions.get(botRoleId);
+  return new Map(roleIds.map((id) => {
+    const pos = positions.get(id);
+    if (botTop === undefined || pos === undefined) return [id, false];
+    return [id, pos < botTop];
+  }));
+}
+
+/**
  * Who still needs the role. Bots are skipped, and so is anyone who already has
  * it, which is what makes a re-run a no-op rather than N pointless API calls.
  *
@@ -84,4 +112,4 @@ function membersNeedingRole(members = [], roleId) {
   return members.filter((m) => !m.isBot && !(m.roleIds || []).includes(roleId));
 }
 
-export { validateRoleNames, resolveRoleName, canAssign, membersNeedingRole };
+export { validateRoleNames, resolveRoleName, canAssign, assignability, membersNeedingRole };
