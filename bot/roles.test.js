@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateRoleNames, resolveRoleName, canAssign, membersNeedingRole } from './roles.js';
+import { validateRoleNames, resolveRoleName, canAssign, assignability, membersNeedingRole } from './roles.js';
 
 // Plain shapes, mapped from discord.js objects at the call site, so the rules
 // below are testable without a gateway connection.
@@ -97,4 +97,49 @@ test('membersNeedingRole: skips bots', () => {
 test('membersNeedingRole: a re-run assigns nothing', () => {
   const members = [member('a', ['r1']), member('b', ['r1'])];
   assert.deepEqual(membersNeedingRole(members, 'r1'), []);
+});
+
+// --- assignability ---
+//
+// Creating a role inserts it at the bottom and shifts everything above it up,
+// including the bot's own role. Reading the bot's position BEFORE creating and
+// comparing it against positions read AFTER is the bug that shipped: three
+// roles genuinely below the bot were reported as sitting above it. Deriving
+// both sides from one snapshot makes that mistake unrepresentable.
+
+test('assignability: roles created below the bot are assignable', () => {
+  // The real shape after /setup-roles ran: bot pushed up to 5 by the three
+  // insertions, new roles occupying 1-3.
+  const snapshot = [
+    { id: 'everyone', position: 0 },
+    { id: 'cold', position: 1 },
+    { id: 'hot', position: 2 },
+    { id: 'poker', position: 3 },
+    { id: 'other', position: 4 },
+    { id: 'bot', position: 5 },
+    { id: 'admin', position: 6 },
+  ];
+  const got = assignability(snapshot, 'bot', ['poker', 'hot', 'cold']);
+  assert.deepEqual([...got.entries()], [['poker', true], ['hot', true], ['cold', true]]);
+});
+
+test('assignability: a role above the bot is still refused', () => {
+  const snapshot = [
+    { id: 'bot', position: 5 },
+    { id: 'admin', position: 6 },
+    { id: 'poker', position: 1 },
+  ];
+  const got = assignability(snapshot, 'bot', ['admin', 'poker']);
+  assert.equal(got.get('admin'), false);
+  assert.equal(got.get('poker'), true);
+});
+
+test('assignability: an unknown bot role refuses everything rather than guessing', () => {
+  const snapshot = [{ id: 'poker', position: 1 }];
+  assert.equal(assignability(snapshot, 'missing', ['poker']).get('poker'), false);
+});
+
+test('assignability: a role missing from the snapshot is refused, not assumed fine', () => {
+  const snapshot = [{ id: 'bot', position: 5 }];
+  assert.equal(assignability(snapshot, 'bot', ['ghost']).get('ghost'), false);
 });

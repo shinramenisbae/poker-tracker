@@ -39,7 +39,7 @@ import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js
 import { resolveSettings, isConfigured, envDefaultsFor } from './settings.js';
 import { buildRegistry, trackerFor } from './registry.js';
 import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
-import { validateRoleNames, resolveRoleName, canAssign, membersNeedingRole } from './roles.js';
+import { validateRoleNames, resolveRoleName, assignability, membersNeedingRole } from './roles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1365,7 +1365,6 @@ async function handleSetupRolesSubmit(interaction) {
       content: '⚠️ I need the **Manage Roles** permission to do this. Nothing was changed.',
     });
   }
-  const botTop = me.roles.highest.position;
 
   // Resolve every name before writing anything, so a failure part-way through
   // doesn't leave the server with some roles made and others not.
@@ -1397,16 +1396,24 @@ async function handleSetupRolesSubmit(interaction) {
     return respond(interaction, { content: `⚠️ Roles are ready but saving them failed: ${err.message}` });
   }
 
+  // Creating a role shifts everything above it up, the bot's own role included,
+  // so positions read before this point are stale. Re-read the whole list from
+  // the API and judge every role against that one snapshot.
+  await guild.roles.fetch(undefined, { force: true });
+  const freshMe = await guild.members.fetchMe({ force: true });
+  const snapshot = [...guild.roles.cache.values()].map((r) => ({ id: r.id, position: r.position }));
+  const assignable = assignability(snapshot, freshMe.roles.highest.id, resolved.map((r) => r.role.id));
+
   const lines = resolved.map((r) => {
     const how = r.action === 'reuse' ? 'reused existing' : 'created';
-    // A role the bot made is always below its own; a reused one may not be, and
-    // the bot cannot promote itself to fix that.
-    const warn = canAssign(r.role, botTop) ? '' : ' — ⚠️ sits above my role, move it below or I can\'t assign it';
+    // A role the bot made lands below its own; a reused one may not, and the
+    // bot cannot promote itself to fix that.
+    const warn = assignable.get(r.role.id) ? '' : ' — ⚠️ sits above my role, move it below or I can\'t assign it';
     return `• **${r.label}:** <@&${r.role.id}> _(${how})_${warn}`;
   });
 
   const ping = resolved.find((r) => r.key === 'poker');
-  if (ping) lines.push(await assignPingRole(guild, ping.role, botTop));
+  if (ping) lines.push(await assignPingRole(guild, ping.role, assignable.get(ping.role.id)));
 
   return respond(interaction, {
     content: `✅ **Roles set up**\n${lines.join('\n')}`,
@@ -1415,8 +1422,8 @@ async function handleSetupRolesSubmit(interaction) {
 }
 
 /** Hand the results ping role to every human who doesn't have it yet. */
-async function assignPingRole(guild, role, botTop) {
-  if (!canAssign(role, botTop)) {
+async function assignPingRole(guild, role, isAssignable) {
+  if (!isAssignable) {
     return '• _Ping role not handed out — it sits above my role._';
   }
   let all;
