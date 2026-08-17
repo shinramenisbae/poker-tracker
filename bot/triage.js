@@ -26,9 +26,19 @@ export function classifyAttachment(att) {
 //
 // A ledger upload takes precedence over a hand log in the same message: the
 // session gets imported first, then the hand log is attached.
-export function attachmentTrigger(kinds) {
+// Screenshot reading needs a Gemini key. Without one it isn't a degraded
+// feature, it's an absent one — so the bot should stop treating images as
+// something it can act on rather than failing per-thread on every restart.
+export function visionEnabled(env = {}) {
+  return Boolean(String(env.GEMINI_API_KEY || '').trim());
+}
+
+export function attachmentTrigger(kinds, { vision = true } = {}) {
   const set = Array.isArray(kinds) ? kinds : [];
-  if (set.includes('ledger') || set.includes('image')) return 'upload';
+  const usableImage = vision && set.includes('image');
+  if (set.includes('ledger') || usableImage) return 'upload';
+  // A hand log still parses locally, so it must not be dropped just because it
+  // arrived alongside a screenshot the bot can no longer read.
   if (set.includes('handlog')) return 'handlog';
   return null;
 }
