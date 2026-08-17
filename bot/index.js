@@ -37,6 +37,7 @@ import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
 import { resolveSettings, isConfigured } from './settings.js';
 import { buildRegistry, trackerFor } from './registry.js';
+import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1076,9 +1077,13 @@ async function handlePaidCommand(interaction) {
     return interaction.reply({ content: '⚠️ Use `/paid` inside a session results thread.', flags: MessageFlags.Ephemeral });
   }
 
+  // Everything past here fetches from the tracker, which can outlast Discord's
+  // 3s reply window. Claim the interaction first; the answer arrives by edit.
+  await interaction.deferReply();
+
   const session = await findSessionByThreadId(ch.id);
   if (!session) {
-    return interaction.reply({ content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
+    return respond(interaction, { content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
   }
 
   const settlements = calculateSettlements(session);
@@ -1094,7 +1099,7 @@ async function handlePaidCommand(interaction) {
   const linkUser = interaction.options.getUser('user');
 
   if (linkUser && !named) {
-    return interaction.reply({
+    return respond(interaction, {
       content: '⚠️ `user:` requires `player:` — specify which player to link them to.',
       flags: MessageFlags.Ephemeral,
     });
@@ -1106,12 +1111,12 @@ async function handlePaidCommand(interaction) {
     // Resolve a named target case-insensitively against this session's players.
     targetName = allNames.find((n) => n.toLowerCase() === named.trim().toLowerCase());
     if (!targetName) {
-      return interaction.reply({ content: `⚠️ No player named **${named}** in this session.`, flags: MessageFlags.Ephemeral });
+      return respond(interaction, { content: `⚠️ No player named **${named}** in this session.`, flags: MessageFlags.Ephemeral });
     }
   } else {
     // No name → the requester marks themselves. Requires a known link.
     if (!requesterName) {
-      return interaction.reply({
+      return respond(interaction, {
         content: '⚠️ I don’t know who you are yet. Run `/paid player:<your name>` once and I’ll remember you.',
         flags: MessageFlags.Ephemeral,
       });
@@ -1133,7 +1138,7 @@ async function handlePaidCommand(interaction) {
   }
 
   if (!debtorNames.has(targetName)) {
-    return interaction.reply({
+    return respond(interaction, {
       content: `${linkNote}ℹ️ **${targetName}** has no outstanding bank transfer for this session (nothing to mark).`,
       flags: MessageFlags.Ephemeral,
     });
@@ -1142,7 +1147,7 @@ async function handlePaidCommand(interaction) {
   try {
     await markPaid(session.id, targetName, links[interaction.user.id] || interaction.user.username);
   } catch (err) {
-    return interaction.reply({ content: `⚠️ Failed to record payment: ${err.message}`, flags: MessageFlags.Ephemeral });
+    return respond(interaction, { content: `⚠️ Failed to record payment: ${err.message}`, flags: MessageFlags.Ephemeral });
   }
 
   // Public confirmation in-thread, plus remaining unpaid count.
@@ -1155,7 +1160,7 @@ async function handlePaidCommand(interaction) {
   } else {
     msg += ' 🎉 Everyone has paid!';
   }
-  return interaction.reply({ content: msg });
+  return respond(interaction, { content: msg });
 }
 
 async function handleUnpaidCommand(interaction) {
@@ -1166,15 +1171,19 @@ async function handleUnpaidCommand(interaction) {
     return interaction.reply({ content: '⚠️ Use `/unpaid` inside a session results thread.', flags: MessageFlags.Ephemeral });
   }
 
+  // Fetching the session list alone runs to megabytes; claim the interaction
+  // before that so a slow tracker can't cost us the reply window.
+  await interaction.deferReply();
+
   const session = await findSessionByThreadId(ch.id);
   if (!session) {
-    return interaction.reply({ content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
+    return respond(interaction, { content: "⚠️ Couldn't find a session for this thread.", flags: MessageFlags.Ephemeral });
   }
 
   const payments = await getSessionPayments(session.id);
   const unpaid = unpaidDebtors(session, new Set(Object.keys(payments)));
   if (unpaid.length === 0) {
-    return interaction.reply({ content: `🎉 **${session.date}** — everyone has paid. Nothing outstanding.` });
+    return respond(interaction, { content: `🎉 **${session.date}** — everyone has paid. Nothing outstanding.` });
   }
 
   // @mention linked users where we can; plain name otherwise.
@@ -1194,7 +1203,7 @@ async function handleUnpaidCommand(interaction) {
   const content =
     `💸 **Still unpaid — ${session.date}**\n${lines.join('\n')}\n` +
     `_Total outstanding: $${total.toFixed(2)}. Run \`/paid\` once you've sent it._`;
-  return interaction.reply({ content, allowedMentions: { users: mentions } });
+  return respond(interaction, { content, allowedMentions: { users: mentions } });
 }
 
 // /setup — the server owner configures the bot from inside Discord. Every
@@ -1236,10 +1245,13 @@ async function handleSetupCommand(interaction) {
     });
   }
 
+  // Option validation above is local and instant; saving is not.
+  await interaction.deferReply();
+
   try {
     await trackerPut('/bot-settings', update);
   } catch (err) {
-    return interaction.reply({ content: `⚠️ Couldn't save settings: ${err.message}`, flags: MessageFlags.Ephemeral });
+    return respond(interaction, { content: `⚠️ Couldn't save settings: ${err.message}`, flags: MessageFlags.Ephemeral });
   }
   await refreshSettings();
   // The reminder timer captured the old hour/timezone; re-arm it so a changed
@@ -1248,7 +1260,7 @@ async function handleSetupCommand(interaction) {
     scheduleDailyReminders({ reason: 'settings updated' });
   }
 
-  return interaction.reply({ content: `✅ Settings updated.\n\n${describeSettings()}`, allowedMentions: { parse: [] } });
+  return respond(interaction, { content: `✅ Settings updated.\n\n${describeSettings()}`, allowedMentions: { parse: [] } });
 }
 
 function describeSettings() {
@@ -1272,10 +1284,12 @@ function describeSettings() {
 }
 
 async function handleSettingsCommand(interaction) {
+  // Ephemeral from the outset: deferring fixes visibility, so it must be
+  // claimed here rather than on the reply below.
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   await refreshSettings();
-  return interaction.reply({
+  return respond(interaction, {
     content: `⚙️ **Poker bot configuration**\n${describeSettings()}`,
-    flags: MessageFlags.Ephemeral,
     allowedMentions: { parse: [] },
   });
 }
@@ -1286,20 +1300,22 @@ async function handleLinkCommand(interaction) {
   const named = (interaction.options.getString('player') || '').trim();
   const targetUser = interaction.options.getUser('user') || interaction.user;
 
+  await interaction.deferReply();
+
   // Resolve case-insensitively against the tracker's canonical player list so
   // a typo can't create a link to a player that doesn't exist.
   let canonical;
   try {
     canonical = (await trackerGet('/alias-mappings')).canonicalPlayers || [];
   } catch (err) {
-    return interaction.reply({
+    return respond(interaction, {
       content: `⚠️ Couldn't fetch the player list from the tracker: ${err.message}`,
       flags: MessageFlags.Ephemeral,
     });
   }
   const playerName = canonical.find((n) => n.toLowerCase() === named.toLowerCase());
   if (!playerName) {
-    return interaction.reply({
+    return respond(interaction, {
       content: `⚠️ No player named **${named}** in the tracker. Check the exact name at ${currentTracker().uiBase}/#/aliases.`,
       flags: MessageFlags.Ephemeral,
     });
@@ -1310,7 +1326,7 @@ async function handleLinkCommand(interaction) {
   try {
     await linkDiscordUser(targetUser.id, playerName);
   } catch (err) {
-    return interaction.reply({
+    return respond(interaction, {
       content: `⚠️ Failed to save the link: ${err.message}`,
       flags: MessageFlags.Ephemeral,
     });
@@ -1326,7 +1342,7 @@ async function handleLinkCommand(interaction) {
   if (otherUid) {
     msg += `\n⚠️ Heads up: <@${otherUid}> is also linked to **${playerName}** — if that's stale, re-link them with \`/link\`.`;
   }
-  return interaction.reply({ content: msg, allowedMentions: { parse: [] } });
+  return respond(interaction, { content: msg, allowedMentions: { parse: [] } });
 }
 
 // -------- Daily unpaid-debt reminder --------
@@ -1479,7 +1495,16 @@ async function runPaymentReminders({ sessionId = null } = {}) {
       bankName,
       bankInfo: bankAccounts[bankName],
     });
-    await thread.send({ content, allowedMentions: { users: mentions } });
+    // One unreachable thread must not cost every later session its reminder —
+    // the loop runs newest-first, so an old thread throwing here used to end
+    // the whole day's run silently.
+    try {
+      await sendToThread(thread, { content, allowedMentions: { users: mentions } });
+    } catch (err) {
+      console.error(`Reminder failed for session ${session.id}:`, err.message);
+      skipped.push({ sessionId: session.id, reason: `send failed: ${err.message}` });
+      continue;
+    }
     reminded.push(session.id);
   }
   console.log(`Payment reminders: pinged ${reminded.length} thread(s)${sessionId ? ` (session ${sessionId})` : ''}.`);
@@ -1546,12 +1571,14 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   try {
+    // Session threads auto-archive after a week and an archived thread rejects
+    // every message — including the error report below, which is why these
+    // failures used to surface as nothing at all. Reopen it first.
+    await unarchiveIfArchived(interaction.channel);
     await withGuild(ctx, () => handler(interaction));
   } catch (err) {
     console.error(`${interaction.commandName} command error (${ctx.label}):`, err);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
-    }
+    await respond(interaction, { content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 });
 
