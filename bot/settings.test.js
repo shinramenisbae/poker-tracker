@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSettings, isConfigured } from './settings.js';
+import { resolveSettings, isConfigured, envDefaultsFor } from './settings.js';
 
 const ENV = {
   DISCORD_CHANNEL_ID: 'env-channel',
@@ -76,4 +76,33 @@ test('guild identity is reported only from /setup', () => {
   assert.equal(s.guildId, 'g1');
   assert.equal(s.guildName, 'Tribe B');
   assert.equal(resolveSettings(null, ENV).guildId, '');
+});
+
+// --- which guild the env block belongs to ---
+//
+// The env vars describe ONE Discord server. With several guilds served by one
+// process, handing those defaults to a guild that hasn't run /setup would point
+// it at another group's channel — which is how group B's tracker ended up
+// scanning group A's threads.
+
+test('envDefaultsFor: legacy mode gives the env block to the only guild there is', () => {
+  const env = envDefaultsFor({ legacy: true, guildId: null }, ENV);
+  assert.equal(env.DISCORD_CHANNEL_ID, 'env-channel');
+});
+
+test('envDefaultsFor: the guild that owns the env block still inherits it', () => {
+  const env = envDefaultsFor({ legacy: false, envGuildId: 'guild-a', guildId: 'guild-a' }, ENV);
+  assert.equal(env.DISCORD_CHANNEL_ID, 'env-channel');
+});
+
+test('envDefaultsFor: another guild inherits nothing', () => {
+  const env = envDefaultsFor({ legacy: false, envGuildId: 'guild-a', guildId: 'guild-b' }, ENV);
+  assert.deepEqual(env, {});
+  // and so resolves to no watched channel at all, rather than group A's
+  assert.equal(isConfigured(resolveSettings(null, env)), false);
+});
+
+test('envDefaultsFor: fails closed when no guild claims the env block', () => {
+  const env = envDefaultsFor({ legacy: false, envGuildId: '', guildId: 'guild-a' }, ENV);
+  assert.deepEqual(env, {});
 });

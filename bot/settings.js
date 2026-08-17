@@ -74,4 +74,28 @@ function isConfigured(settings) {
   return Boolean(settings && settings.channelId);
 }
 
-export { resolveSettings, isConfigured };
+/**
+ * Which guild, if any, may fall back to the deployment's env vars.
+ *
+ * The env block describes ONE Discord server — its channel, its roles. With a
+ * single tracker that's the only server there is, so it applies unconditionally.
+ * Once GUILD_TRACKERS names several, handing those defaults to every guild
+ * points a server that hasn't run /setup at another group's channel, and the
+ * bot then scans that channel into the wrong tracker. So in multi-guild mode
+ * only the guild named by DISCORD_GUILD_ID inherits them.
+ *
+ * Fails closed: with no guild claiming the env block, nobody inherits it and
+ * the affected servers report as unconfigured, which is loud and harmless —
+ * the opposite mistake is silent and crosses group boundaries.
+ *
+ * @param {{legacy: boolean, envGuildId?: string, guildId?: string|null}} ctx
+ * @param {object} env the bot's process.env-derived defaults
+ * @returns {object} env, or an empty object when this guild may not inherit it
+ */
+function envDefaultsFor({ legacy = false, envGuildId = '', guildId = null }, env = {}) {
+  if (legacy) return env;
+  if (envGuildId && String(guildId) === String(envGuildId)) return env;
+  return {};
+}
+
+export { resolveSettings, isConfigured, envDefaultsFor };

@@ -16,6 +16,11 @@ Environment=PORT=5002
 Environment=POKER_DB=/srv/poker-b/poker.db
 Environment=CORS_ORIGINS=https://poker-b.example.com
 
+# aliases-seed.json carries the FIRST group's roster — real names and the
+# PokerNow nicknames they play under. Without this, a fresh database is seeded
+# with it and this group's alias screen lists 45 strangers.
+Environment=SEED_ALIASES=0
+
 # Which Discord server this tracker belongs to. One bot process serves every
 # server, so it can't tell which tracker a request is for unless the backend
 # says — forwarded /announce, /repost etc. carry this id.

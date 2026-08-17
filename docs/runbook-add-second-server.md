@@ -87,7 +87,13 @@ Environment=PORT=5002
 Environment=POKER_DB=/srv/poker-b/poker.db
 Environment=CORS_ORIGINS=https://<HOST_B>
 Environment=GUILD_ID=<GUILD_B>
+Environment=SEED_ALIASES=0
 ```
+
+`SEED_ALIASES=0` matters: `backend/aliases-seed.json` holds the *first* group's
+roster — real names and the PokerNow nicknames they play under — and a fresh
+database is seeded with it unless this is set. Group B would open their alias
+screen to 45 strangers.
 
 `GUILD_ID` matters: all backends call the same shared bot, so this is how the
 bot knows which server a forwarded request belongs to.
@@ -154,6 +160,18 @@ GUILD_TRACKERS=[{"guildId":"<GUILD_A>","apiBase":"https://srv1346724.hstgr.cloud
 ⚠️ **Omitting group A here would leave the existing group unserved.** Legacy
 mode applies only when `GUILD_TRACKERS` is unset.
 
+Then add a second line naming which server the rest of `bot/.env` describes:
+
+```
+DISCORD_GUILD_ID=<GUILD_A>
+```
+
+⚠️ **Required.** `DISCORD_CHANNEL_ID` and the role IDs in that file are group
+A's. Without this line every guild inherits them, so group B — which hasn't run
+`/setup` yet — watches *group A's channel* and scans it into group B's tracker.
+The bot warns at startup if `GUILD_TRACKERS` names several servers and this is
+unset.
+
 Validate the JSON before restarting:
 ```bash
 grep '^GUILD_TRACKERS=' bot/.env | cut -d= -f2- | python3 -m json.tool
@@ -198,6 +216,10 @@ extras: `reminder_hour:10 timezone:Pacific/Auckland chip_divisor:100`.
 # B is empty and independent
 curl -s localhost:5002/api/sessions           # []
 curl -s localhost:5002/api/bank-accounts      # {"accounts":{}}
+
+# Player identities too — this is the check that used to be missing. Group A's
+# roster reaching B is not visible in sessions or bank accounts.
+curl -s localhost:5002/api/alias-mappings     # {"aliases":[], "canonicalPlayers":[]}
 
 # A is untouched
 curl -s localhost:5001/api/sessions | head -c 200      # A's real sessions
