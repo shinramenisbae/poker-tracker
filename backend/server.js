@@ -1004,6 +1004,60 @@ app.delete('/api/bank-accounts/:name', (req, res) => {
   });
 });
 
+// --- Bot settings (set from Discord via /setup) ---
+// Single row; null columns mean "not configured, fall back to the bot's env".
+
+const BOT_SETTING_FIELDS = [
+  'guildId', 'guildName', 'channelId', 'pokerRoleId', 'coldRoleId',
+  'hotRoleId', 'reminderHour', 'reminderTz', 'chipDivisor',
+];
+
+// GET /api/bot-settings → { settings: {...} | null }
+app.get('/api/bot-settings', (req, res) => {
+  db.get('SELECT * FROM bot_settings WHERE id = 1', [], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ settings: row || null });
+  });
+});
+
+// PUT /api/bot-settings — partial update; only the provided fields change, so
+// /setup can update one thing without clearing the rest. Explicit null clears.
+app.put('/api/bot-settings', (req, res) => {
+  const body = req.body || {};
+  const provided = BOT_SETTING_FIELDS.filter((f) => body[f] !== undefined);
+  if (provided.length === 0) {
+    return res.status(400).json({ error: `Provide at least one of: ${BOT_SETTING_FIELDS.join(', ')}` });
+  }
+  const now = new Date().toISOString();
+
+  db.get('SELECT * FROM bot_settings WHERE id = 1', [], (err, existing) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    const merged = {};
+    for (const f of BOT_SETTING_FIELDS) {
+      merged[f] = body[f] !== undefined ? body[f] : (existing ? existing[f] : null);
+    }
+    const cols = BOT_SETTING_FIELDS.join(', ');
+    const marks = BOT_SETTING_FIELDS.map(() => '?').join(', ');
+    const values = BOT_SETTING_FIELDS.map((f) => merged[f]);
+
+    db.run(
+      `INSERT INTO bot_settings (id, ${cols}, updatedAt) VALUES (1, ${marks}, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         ${BOT_SETTING_FIELDS.map((f) => `${f} = excluded.${f}`).join(', ')},
+         updatedAt = excluded.updatedAt`,
+      [...values, now],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        db.get('SELECT * FROM bot_settings WHERE id = 1', [], (err, row) => {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ ok: true, settings: row });
+        });
+      }
+    );
+  });
+});
+
 // --- Discord user ↔ player links ---
 // Lets the bot resolve a Discord user to a canonical player (for /paid) and
 // @mention the right user in reminders.

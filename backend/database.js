@@ -182,6 +182,27 @@ db.serialize(() => {
   db.run(`ALTER TABLE buyIns ADD COLUMN stackedHand TEXT`, (err) => {
     // Ignore error if column already exists
   });
+
+  // bot_settings: Discord wiring the server owner sets with /setup, instead of
+  // someone SSHing in to edit the bot's .env. Single row (one instance watches
+  // one server); guildId records where /setup was run. Anything null here falls
+  // back to the corresponding env var, so existing env-configured deployments
+  // are unaffected until someone actually runs /setup.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS bot_settings (
+      id           INTEGER PRIMARY KEY CHECK (id = 1),
+      guildId      TEXT,
+      guildName    TEXT,
+      channelId    TEXT,
+      pokerRoleId  TEXT,
+      hotRoleId    TEXT,
+      coldRoleId   TEXT,
+      reminderHour INTEGER,
+      reminderTz   TEXT,
+      chipDivisor  REAL,
+      updatedAt    TEXT NOT NULL
+    )
+  `);
 });
 
 module.exports = db;

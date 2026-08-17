@@ -19,29 +19,48 @@ on a live DB holding years of history. Not worth it for two groups.)
 
 ## Why the bot can't simply be invited to the second server
 
-Everything except `/link` is gated on the single `DISCORD_CHANNEL_ID`:
-ledger auto-import, `/paid`, `/unpaid`, results posts, Fix & repost and the
-daily reminders. And Discord role IDs are per-server, so the @poker ping and the
-🔥/🧊 streak roles don't exist in the other server. An invited bot would show its
-slash commands and do essentially nothing.
+Each running bot process watches exactly **one** channel. Ledger auto-import,
+`/paid`, `/unpaid`, results posts, Fix & repost and the daily reminders are all
+gated on it, and `/setup` sets that one channel — so pointing it at the second
+server would just stop it working in the first. A second *process* is what makes
+two servers possible; `/setup` is what makes configuring each of them easy.
 
 ## What each instance needs
 
-Everything is env-configurable. Instance A keeps working untouched — all the
-env vars below default to its current values.
+Only **bootstrap** config lives in files — the values the bot needs before it
+can read its own database. Everything Discord-side is set by the second group's
+own server owner with `/setup`, so you never edit their config for them.
 
 | Setting | Instance A (existing) | Instance B (new) |
 |---|---|---|
 | `PORT` (backend) | unset → `5001` | `5002` |
 | `POKER_DB` | unset → `backend/poker.db` | `/srv/poker-b/poker.db` |
 | `CORS_ORIGINS` | unset → current allow-list | `https://poker-b.example.com` |
-| `BOT_HTTP_PORT` | `6300` | `6301` |
-| `TRACKER_API_BASE` | `https://srv1346724…/api` | `https://poker-b.example.com/api` |
-| `TRACKER_UI_BASE` | `https://srv1346724…` | `https://poker-b.example.com` |
-| `DISCORD_TOKEN` / `DISCORD_APP_ID` | app A | **a second Discord application** |
-| `DISCORD_CHANNEL_ID` | A's channel | B's channel |
-| `DISCORD_*_ROLE_ID` | A's roles | B's roles |
 | `BOT_BASE` (backend → bot) | unset → `127.0.0.1:6300` | `http://127.0.0.1:6301` |
+| `BOT_ENV_FILE` | unset → `bot/.env` | `/srv/poker-b/bot.env` |
+| `BOT_HTTP_PORT` | `6300` | `6301` |
+| `TRACKER_API_BASE` / `TRACKER_UI_BASE` | instance A's host | instance B's host |
+| `DISCORD_TOKEN` / `DISCORD_APP_ID` | app A | **a second Discord application** |
+| `GEMINI_API_KEY` | shared | shared |
+
+Set from Discord with `/setup`, not in any file: the watched **channel**, the
+**ping / hot / cold roles**, the **reminder hour + timezone**, and the
+**chip divisor**. (The old env vars still work as a fallback, so instance A is
+unaffected — but `/setup` takes precedence and is the supported path.)
+
+## Handover: what the other group's owner does
+
+Once their bot is running, they run this in their own server — no IDs to copy,
+no Developer Mode, no access to your box:
+
+```
+/setup channel:#poker-sessions poker_role:@Poker hot_role:@Running Hot cold_role:@Running Cold
+```
+
+Discord shows native channel and role pickers for those options. `/setup` is
+restricted to **Manage Server**, every option is optional (so it doubles as
+"change one thing later"), and `/settings` prints the current config. Until a
+channel is set the bot stays idle and says so in its logs.
 
 ### Why a second Discord *application*, not just a second server invite
 
@@ -83,8 +102,9 @@ systemctl status tribe-poker-backend-b.service tribe-poker-bot-b.service --no-pa
 ```
 
 Expected in `journalctl -u tribe-poker-bot-b.service`:
-`Registered /paid, /unpaid and /link slash commands.` and
-`Next payment reminder in N.Nh (10:00 Pacific/Auckland).`
+`Registered /paid, /unpaid, /link, /setup and /settings slash commands.` and
+`Next payment reminder in N.Nh (10:00 Pacific/Auckland).` — plus, until
+`/setup` has been run, a line telling the owner to run it.
 
 ### nginx
 
@@ -135,3 +155,5 @@ now so a second-instance problem can't fail instance A's deploy.
 - [ ] Backup timer for `/srv/poker-b/poker.db`
 - [ ] Sanity check: `curl -s localhost:5002/api/sessions` returns `[]`
       (a fresh, empty DB — **not** instance A's sessions)
+- [ ] Handed over: their owner ran `/setup channel:#… poker_role:@… …`
+      and `/settings` shows what they expect
