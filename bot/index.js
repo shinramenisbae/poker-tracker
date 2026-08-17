@@ -14,12 +14,18 @@
 // session's `notes` field:
 //   - "Imported from Discord (threadId=X)"        → online session already imported
 //   - "Announced on Discord (threadId=X)"         → session already announced
-import 'dotenv/config';
+import dotenv from 'dotenv';
+// Loads bot/.env by default. A second instance runs from this same checkout, so
+// it sets BOT_ENV_FILE to its own file — otherwise dotenv would quietly fill any
+// variable that instance's config omits from the FIRST instance's bot/.env
+// (inheriting its DISCORD_TOKEN means two processes on one token: duplicate
+// imports and double replies).
+dotenv.config(process.env.BOT_ENV_FILE ? { path: process.env.BOT_ENV_FILE } : {});
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags } from 'discord.js';
+import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
@@ -28,6 +34,7 @@ import { calculateSettlements, identifyBankPlayer } from './settlement.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
+import { resolveSettings, isConfigured } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,8 +62,37 @@ const {
   DISCORD_COLD_ROLE_ID = '',
 } = process.env;
 
-for (const [k, v] of Object.entries({ DISCORD_TOKEN, DISCORD_CHANNEL_ID, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
+// Bootstrap-only: the bot can't log in or reach the tracker without these, so
+// they must come from the environment. Everything Discord-side (channel, roles,
+// reminder time, chip divisor) is set by the server owner with /setup instead —
+// see resolveSettings() and the SETTINGS cache below.
+for (const [k, v] of Object.entries({ DISCORD_TOKEN, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
+}
+
+// Effective config = whatever /setup stored, layered over the env vars. Cached
+// in memory and refreshed on startup and after each /setup, so the hot paths
+// (message handling, reminders) stay synchronous.
+const SETTINGS_ENV = {
+  DISCORD_CHANNEL_ID,
+  DISCORD_POKER_ROLE_ID,
+  DISCORD_HOT_ROLE_ID,
+  DISCORD_COLD_ROLE_ID,
+  PAYMENT_REMINDER_HOUR,
+  PAYMENT_REMINDER_TZ,
+  POKERNOW_CHIP_DIVISOR: process.env.POKERNOW_CHIP_DIVISOR,
+};
+let SETTINGS = resolveSettings(null, SETTINGS_ENV);
+
+async function refreshSettings() {
+  try {
+    const { settings } = await trackerGet('/bot-settings');
+    SETTINGS = resolveSettings(settings, SETTINGS_ENV);
+  } catch (err) {
+    // Keep whatever we had rather than dropping to an unconfigured state.
+    console.error('Could not load bot settings, keeping current config:', err.message);
+  }
+  return SETTINGS;
 }
 
 const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -271,7 +307,7 @@ function parseCsvLine(line) {
 // player_id is unique-per-session even for guests, so aggregate by that.
 // Values are in chips; divide by POKERNOW_CHIP_DIVISOR (default 100) for $.
 function parsePokernowCsv(text) {
-  const divisor = Number(process.env.POKERNOW_CHIP_DIVISOR || '100');
+  const divisor = SETTINGS.chipDivisor;
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) return { rows: [], dateOverride: null };
   const headers = parseCsvLine(lines[0]).map((h) => h.trim());
@@ -799,7 +835,7 @@ async function buildStreakSection(session) {
 // also clears the opposite role in case a past removal was missed. All role
 // ops are best-effort: a Discord permission error is logged, never thrown.
 async function applyStreakRoles(thread, transitions, sessions, sessionId) {
-  if (!DISCORD_HOT_ROLE_ID && !DISCORD_COLD_ROLE_ID) return;
+  if (!SETTINGS.hotRoleId && !SETTINGS.coldRoleId) return;
   if (transitions.length === 0 || !sessions) return;
   if (!isLatestCompletedSession(sessions, sessionId)) return;
   const guild = thread.guild;
@@ -812,8 +848,8 @@ async function applyStreakRoles(thread, transitions, sessions, sessionId) {
   }
 
   for (const t of transitions) {
-    const roleId = t.kind === 'hot' ? DISCORD_HOT_ROLE_ID : DISCORD_COLD_ROLE_ID;
-    const oppositeId = t.kind === 'hot' ? DISCORD_COLD_ROLE_ID : DISCORD_HOT_ROLE_ID;
+    const roleId = t.kind === 'hot' ? SETTINGS.hotRoleId : SETTINGS.coldRoleId;
+    const oppositeId = t.kind === 'hot' ? SETTINGS.coldRoleId : SETTINGS.hotRoleId;
     if (!roleId) continue;
     const uid = nameToUser[t.playerName];
     if (!uid) continue;
@@ -842,10 +878,10 @@ async function postResultsMessage(thread, session) {
   // Mention the poker role (if configured) so everyone gets pulled into the
   // thread. allowedMentions must explicitly list the role id or Discord
   // suppresses the ping. When unset, send a plain message with no mentions.
-  if (DISCORD_POKER_ROLE_ID) {
+  if (SETTINGS.pokerRoleId) {
     await thread.send({
-      content: `<@&${DISCORD_POKER_ROLE_ID}>\n${text}`,
-      allowedMentions: { roles: [DISCORD_POKER_ROLE_ID] },
+      content: `<@&${SETTINGS.pokerRoleId}>\n${text}`,
+      allowedMentions: { roles: [SETTINGS.pokerRoleId] },
     });
   } else {
     await thread.send({ content: text, allowedMentions: { parse: [] } });
@@ -895,6 +931,60 @@ const LINK_COMMAND = new SlashCommandBuilder()
       .setRequired(false)
   );
 
+// Server-owner setup, so nobody has to SSH in and edit a .env. Uses Discord's
+// native channel/role pickers — the owner never sees or copies an ID, and
+// Developer Mode isn't needed. Restricted to Manage Server.
+const SETUP_COMMAND = new SlashCommandBuilder()
+  .setName('setup')
+  .setDescription('Configure the poker bot for this server (channel, roles, reminder time).')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .setDMPermission(false)
+  .addChannelOption((o) =>
+    o.setName('channel')
+      .setDescription('Channel where session threads live — the bot watches this one.')
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(false)
+  )
+  .addRoleOption((o) =>
+    o.setName('poker_role')
+      .setDescription('Role to @mention on results posts (pulls everyone into the thread).')
+      .setRequired(false)
+  )
+  .addRoleOption((o) =>
+    o.setName('hot_role')
+      .setDescription('Role given for winning 3 sessions in a row.')
+      .setRequired(false)
+  )
+  .addRoleOption((o) =>
+    o.setName('cold_role')
+      .setDescription('Role given for losing 3 sessions in a row.')
+      .setRequired(false)
+  )
+  .addIntegerOption((o) =>
+    o.setName('reminder_hour')
+      .setDescription('Hour (0-23) for the daily unpaid reminder. Default 10.')
+      .setMinValue(0)
+      .setMaxValue(23)
+      .setRequired(false)
+  )
+  .addStringOption((o) =>
+    o.setName('timezone')
+      .setDescription('Timezone for the reminder, e.g. Pacific/Auckland.')
+      .setRequired(false)
+  )
+  .addNumberOption((o) =>
+    o.setName('chip_divisor')
+      .setDescription('PokerNow chips per $1 (default 100; use 1 if you play in dollars).')
+      .setMinValue(0.0001)
+      .setRequired(false)
+  );
+
+const SETTINGS_COMMAND = new SlashCommandBuilder()
+  .setName('settings')
+  .setDescription('Show the bot\'s current configuration for this server.')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .setDMPermission(false);
+
 async function registerSlashCommands() {
   if (!DISCORD_APP_ID) {
     console.warn('DISCORD_APP_ID unset — skipping slash command registration.');
@@ -903,9 +993,12 @@ async function registerSlashCommands() {
   try {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
     await rest.put(Routes.applicationCommands(DISCORD_APP_ID), {
-      body: [PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON(), LINK_COMMAND.toJSON()],
+      body: [
+        PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON(), LINK_COMMAND.toJSON(),
+        SETUP_COMMAND.toJSON(), SETTINGS_COMMAND.toJSON(),
+      ],
     });
-    console.log('Registered /paid, /unpaid and /link slash commands.');
+    console.log('Registered /paid, /unpaid, /link, /setup and /settings slash commands.');
   } catch (err) {
     console.error('Slash command registration failed:', err.message);
   }
@@ -923,7 +1016,7 @@ async function handlePaidCommand(interaction) {
   // Must be used inside a session results thread.
   const ch = interaction.channel;
   const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
-  if (!isThread || ch.parentId !== DISCORD_CHANNEL_ID) {
+  if (!isThread || ch.parentId !== SETTINGS.channelId) {
     return interaction.reply({ content: '⚠️ Use `/paid` inside a session results thread.', flags: MessageFlags.Ephemeral });
   }
 
@@ -1013,7 +1106,7 @@ async function handleUnpaidCommand(interaction) {
   // Must be used inside a session results thread.
   const ch = interaction.channel;
   const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
-  if (!isThread || ch.parentId !== DISCORD_CHANNEL_ID) {
+  if (!isThread || ch.parentId !== SETTINGS.channelId) {
     return interaction.reply({ content: '⚠️ Use `/unpaid` inside a session results thread.', flags: MessageFlags.Ephemeral });
   }
 
@@ -1046,6 +1139,89 @@ async function handleUnpaidCommand(interaction) {
     `💸 **Still unpaid — ${session.date}**\n${lines.join('\n')}\n` +
     `_Total outstanding: $${total.toFixed(2)}. Run \`/paid\` once you've sent it._`;
   return interaction.reply({ content, allowedMentions: { users: mentions } });
+}
+
+// /setup — the server owner configures the bot from inside Discord. Every
+// option is optional, so it doubles as "change one thing later".
+async function handleSetupCommand(interaction) {
+  const channel = interaction.options.getChannel('channel');
+  const pokerRole = interaction.options.getRole('poker_role');
+  const hotRole = interaction.options.getRole('hot_role');
+  const coldRole = interaction.options.getRole('cold_role');
+  const hour = interaction.options.getInteger('reminder_hour');
+  const tz = interaction.options.getString('timezone');
+  const divisor = interaction.options.getNumber('chip_divisor');
+
+  const update = { guildId: interaction.guildId, guildName: interaction.guild?.name || null };
+  if (channel) update.channelId = channel.id;
+  if (pokerRole) update.pokerRoleId = pokerRole.id;
+  if (hotRole) update.hotRoleId = hotRole.id;
+  if (coldRole) update.coldRoleId = coldRole.id;
+  if (hour !== null) update.reminderHour = hour;
+  if (divisor !== null) update.chipDivisor = divisor;
+  if (tz) {
+    // Reject a bad zone here rather than letting it break the daily scheduler.
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    } catch {
+      return interaction.reply({
+        content: `⚠️ **${tz}** isn't a valid timezone. Use an IANA name like \`Pacific/Auckland\`.`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+    update.reminderTz = tz;
+  }
+
+  const changed = Object.keys(update).filter((k) => k !== 'guildId' && k !== 'guildName');
+  if (changed.length === 0) {
+    return interaction.reply({
+      content: 'Nothing to change — pass at least one option. Run `/settings` to see the current config.',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  try {
+    await trackerPut('/bot-settings', update);
+  } catch (err) {
+    return interaction.reply({ content: `⚠️ Couldn't save settings: ${err.message}`, flags: MessageFlags.Ephemeral });
+  }
+  await refreshSettings();
+  // The reminder timer captured the old hour/timezone; re-arm it so a changed
+  // schedule takes effect without restarting the bot.
+  if (update.reminderHour !== undefined || update.reminderTz !== undefined) {
+    scheduleDailyReminders({ reason: 'settings updated' });
+  }
+
+  return interaction.reply({ content: `✅ Settings updated.\n\n${describeSettings()}`, allowedMentions: { parse: [] } });
+}
+
+function describeSettings() {
+  const s = SETTINGS;
+  const via = (f) => (s.source[f] === 'setup' ? '' : ' _(from server config)_');
+  const line = (label, value, field) => (value
+    ? `• **${label}:** ${value}${via(field)}`
+    : `• **${label}:** _not set_`);
+
+  return [
+    line('Watched channel', s.channelId ? `<#${s.channelId}>` : '', 'channelId'),
+    line('Results ping role', s.pokerRoleId ? `<@&${s.pokerRoleId}>` : '', 'pokerRoleId'),
+    line('Running Hot role', s.hotRoleId ? `<@&${s.hotRoleId}>` : '', 'hotRoleId'),
+    line('Running Cold role', s.coldRoleId ? `<@&${s.coldRoleId}>` : '', 'coldRoleId'),
+    line('Daily reminder', `${String(s.reminderHour).padStart(2, '0')}:00 ${s.reminderTz}`, 'reminderHour'),
+    line('PokerNow chips per $1', String(s.chipDivisor), 'chipDivisor'),
+    !isConfigured(s)
+      ? '\n⚠️ No channel set yet — run `/setup channel:#your-poker-channel` to switch the bot on.'
+      : '',
+  ].filter(Boolean).join('\n');
+}
+
+async function handleSettingsCommand(interaction) {
+  await refreshSettings();
+  return interaction.reply({
+    content: `⚙️ **Poker bot configuration**\n${describeSettings()}`,
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: { parse: [] },
+  });
 }
 
 // /link — connect a Discord user to a tracker player, no payment required.
@@ -1257,12 +1433,21 @@ async function runPaymentReminders({ sessionId = null } = {}) {
 // Self-rescheduling daily timer (setTimeout, not setInterval, so DST shifts are
 // recomputed each day). Swallows errors so a transient failure doesn't kill the
 // loop — the next day still runs.
-function scheduleDailyReminders() {
-  const hour = Number(PAYMENT_REMINDER_HOUR);
-  const tz = PAYMENT_REMINDER_TZ;
+// Single pending timer. /setup can re-arm this when the hour/timezone changes,
+// and the old timer MUST be cleared first — each one reschedules itself, so
+// leaving a stale one behind would multiply the daily reminders.
+let reminderTimer = null;
+
+function scheduleDailyReminders({ reason = '' } = {}) {
+  if (reminderTimer) clearTimeout(reminderTimer);
+  const hour = SETTINGS.reminderHour;
+  const tz = SETTINGS.reminderTz;
   const delay = msUntilNextLocalHour(new Date(), hour, tz);
-  console.log(`Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz}).`);
-  setTimeout(async () => {
+  console.log(
+    `Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz})` +
+    `${reason ? ` [${reason}]` : ''}.`
+  );
+  reminderTimer = setTimeout(async () => {
     try { await runPaymentReminders(); }
     catch (err) { console.error('Daily payment reminder failed:', err.message); }
     scheduleDailyReminders(); // reschedule for the following day
@@ -1276,7 +1461,13 @@ const client = new Client({
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const handlers = { paid: handlePaidCommand, unpaid: handleUnpaidCommand, link: handleLinkCommand };
+  const handlers = {
+    paid: handlePaidCommand,
+    unpaid: handleUnpaidCommand,
+    link: handleLinkCommand,
+    setup: handleSetupCommand,
+    settings: handleSettingsCommand,
+  };
   const handler = handlers[interaction.commandName];
   if (!handler) return;
   try {
@@ -1295,7 +1486,7 @@ client.on('messageCreate', async (msg) => {
     const ch = msg.channel;
     const isThread = [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
     if (!isThread) return;
-    if (ch.parentId !== DISCORD_CHANNEL_ID) return;
+    if (ch.parentId !== SETTINGS.channelId) return;
 
     // Only act on messages that actually carry work. Plain chatter ("paid",
     // "lol", @mentions) must not trigger a re-import or hand-log re-parse —
@@ -1318,10 +1509,19 @@ client.on('messageCreate', async (msg) => {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}.`);
 
-  // Register the /paid slash command and arm the daily reminder. Done before the
-  // startup scan (which can early-return) so neither is skipped.
+  // Load /setup config before anything reads it. Commands are registered even
+  // when unconfigured — /setup is how you get configured in the first place.
+  await refreshSettings();
   await registerSlashCommands();
   scheduleDailyReminders();
+
+  if (!isConfigured(SETTINGS)) {
+    console.warn(
+      'No watched channel configured. A server admin should run ' +
+      '"/setup channel:#your-poker-channel" to switch the bot on.'
+    );
+    return;
+  }
 
   // Catch-up scan: process every thread in the watched channel once on startup,
   // to recover threads created/posted while the bot was offline. Runs with the
@@ -1329,9 +1529,9 @@ client.once('ready', async () => {
   // (no prior 🎲 results post) — so a session deliberately deleted between
   // restarts is NOT silently re-created.
   try {
-    const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+    const channel = await client.channels.fetch(SETTINGS.channelId);
     if (!channel || channel.type !== ChannelType.GuildText) {
-      console.warn(`Startup scan skipped: channel ${DISCORD_CHANNEL_ID} is not a GuildText.`);
+      console.warn(`Startup scan skipped: channel ${SETTINGS.channelId} is not a GuildText.`);
       return;
     }
     const threads = new Map();
@@ -1363,9 +1563,9 @@ app.use(express.json());
 // Create the results thread for a session and post into it. Shared by
 // /announce and /reannounce so both produce an identical thread + message.
 async function announceSession(session) {
-  const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+  const channel = await client.channels.fetch(SETTINGS.channelId);
   if (!channel || channel.type !== ChannelType.GuildText) {
-    throw new Error(`Channel ${DISCORD_CHANNEL_ID} not a text channel`);
+    throw new Error(`Channel ${SETTINGS.channelId} not a text channel`);
   }
 
   const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
@@ -1400,7 +1600,7 @@ async function unannounceSession(session) {
   let threadMissing = false;
   if (threadId) {
     const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (thread && thread.isThread() && thread.parentId === DISCORD_CHANNEL_ID) {
+    if (thread && thread.isThread() && thread.parentId === SETTINGS.channelId) {
       await thread.delete('Removed from the poker tracker for a corrected repost');
       deleted = true;
     } else {
@@ -1508,9 +1708,9 @@ app.post('/repost/:sessionId', async (req, res) => {
     }
     let createdThread = false;
     if (!thread) {
-      const channel = await client.channels.fetch(DISCORD_CHANNEL_ID);
+      const channel = await client.channels.fetch(SETTINGS.channelId);
       if (!channel || channel.type !== ChannelType.GuildText) {
-        return res.status(500).json({ error: `Channel ${DISCORD_CHANNEL_ID} not a text channel` });
+        return res.status(500).json({ error: `Channel ${SETTINGS.channelId} not a text channel` });
       }
       const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
       thread = await channel.threads.create({

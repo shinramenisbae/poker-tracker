@@ -37,6 +37,11 @@ EOF
 
 ### 1b. Streak roles (Running Hot / Running Cold)
 
+> **Easier now:** rather than editing `.env`, a server admin can just run
+> `/setup hot_role:@Running Hot cold_role:@Running Cold` in Discord — native
+> role pickers, no IDs, takes effect immediately. `/settings` shows the current
+> config. The env vars below still work as a fallback.
+
 In Discord, create two roles — e.g. **🔥 Running Hot** and **🧊 Running Cold**
 (any color/name you like) — then copy their IDs and add:
 
@@ -92,7 +97,7 @@ journalctl -u tribe-poker-bot.service -n 30 --no-pager
 ```
 
 Expect log lines:
-- `Registered /paid, /unpaid and /link slash commands.`
+- `Registered /paid, /unpaid, /link, /setup and /settings slash commands.`
 - `Next payment reminder in N.Nh (10:00 Pacific/Auckland).`
 
 Global slash commands can take a few minutes to first appear in Discord.

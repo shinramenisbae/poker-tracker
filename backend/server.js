@@ -5,7 +5,7 @@ const path = require('path');
 const db = require('./database');
 
 const app = express();
-const PORT = 5001;
+const PORT = Number(process.env.PORT) || 5001;
 
 // --- Alias seeding (one-shot on first start of an empty table) ---
 const ALIAS_SEED_PATH = path.join(__dirname, 'aliases-seed.json');
@@ -106,8 +106,15 @@ async function fetchSheetCSV(sheetName) {
   return parseCSV(text);
 }
 
+// Comma-separated CORS_ORIGINS overrides these (a second instance serves a
+// different hostname); unset keeps the original allow-list.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: [
+  origin: CORS_ORIGINS.length > 0 ? CORS_ORIGINS : [
     'https://srv1346724.hstgr.cloud',
     'http://76.13.182.206:5000',
   ],
@@ -994,6 +1001,60 @@ app.delete('/api/bank-accounts/:name', (req, res) => {
   db.run('DELETE FROM bank_accounts WHERE name = ?', [name], function (err) {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ ok: true, name, deleted: this.changes });
+  });
+});
+
+// --- Bot settings (set from Discord via /setup) ---
+// Single row; null columns mean "not configured, fall back to the bot's env".
+
+const BOT_SETTING_FIELDS = [
+  'guildId', 'guildName', 'channelId', 'pokerRoleId', 'coldRoleId',
+  'hotRoleId', 'reminderHour', 'reminderTz', 'chipDivisor',
+];
+
+// GET /api/bot-settings → { settings: {...} | null }
+app.get('/api/bot-settings', (req, res) => {
+  db.get('SELECT * FROM bot_settings WHERE id = 1', [], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ settings: row || null });
+  });
+});
+
+// PUT /api/bot-settings — partial update; only the provided fields change, so
+// /setup can update one thing without clearing the rest. Explicit null clears.
+app.put('/api/bot-settings', (req, res) => {
+  const body = req.body || {};
+  const provided = BOT_SETTING_FIELDS.filter((f) => body[f] !== undefined);
+  if (provided.length === 0) {
+    return res.status(400).json({ error: `Provide at least one of: ${BOT_SETTING_FIELDS.join(', ')}` });
+  }
+  const now = new Date().toISOString();
+
+  db.get('SELECT * FROM bot_settings WHERE id = 1', [], (err, existing) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    const merged = {};
+    for (const f of BOT_SETTING_FIELDS) {
+      merged[f] = body[f] !== undefined ? body[f] : (existing ? existing[f] : null);
+    }
+    const cols = BOT_SETTING_FIELDS.join(', ');
+    const marks = BOT_SETTING_FIELDS.map(() => '?').join(', ');
+    const values = BOT_SETTING_FIELDS.map((f) => merged[f]);
+
+    db.run(
+      `INSERT INTO bot_settings (id, ${cols}, updatedAt) VALUES (1, ${marks}, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         ${BOT_SETTING_FIELDS.map((f) => `${f} = excluded.${f}`).join(', ')},
+         updatedAt = excluded.updatedAt`,
+      [...values, now],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        db.get('SELECT * FROM bot_settings WHERE id = 1', [], (err, row) => {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ ok: true, settings: row });
+        });
+      }
+    );
   });
 });
 
