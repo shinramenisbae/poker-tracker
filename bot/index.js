@@ -35,7 +35,7 @@ import { calculateSettlements, identifyBankPlayer } from './settlement.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
-import { resolveSettings, isConfigured } from './settings.js';
+import { resolveSettings, isConfigured, envDefaultsFor } from './settings.js';
 import { buildRegistry, trackerFor } from './registry.js';
 import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
 
@@ -63,6 +63,9 @@ const {
   // via /paid). Streak lines appear in results posts regardless.
   DISCORD_HOT_ROLE_ID = '',
   DISCORD_COLD_ROLE_ID = '',
+  // Which Discord server the env vars above describe. Required once
+  // GUILD_TRACKERS serves more than one, so the others don't inherit them.
+  DISCORD_GUILD_ID = '',
 } = process.env;
 
 // Bootstrap-only: the bot can't log in without these. Tracker URLs come from
@@ -98,6 +101,16 @@ console.log(
     ? `Tracker: single (${REGISTRY.entries[0].apiBase}).`
     : `Trackers: ${REGISTRY.entries.map((e) => `${e.label}→${e.apiBase}`).join(', ')}.`
 );
+// Serving several guilds with an unclaimed env block means none of them inherit
+// it, so a server configured only by env goes quiet. That's the safe direction,
+// but it is never what the operator meant — say so loudly.
+if (!REGISTRY.legacy && !DISCORD_GUILD_ID && DISCORD_CHANNEL_ID) {
+  console.warn(
+    'DISCORD_GUILD_ID is not set while GUILD_TRACKERS serves several servers. ' +
+    'No guild will inherit the env config, so any server without its own /setup ' +
+    'has no watched channel. Set DISCORD_GUILD_ID to the server the env vars describe.'
+  );
+}
 
 const guildContext = new AsyncLocalStorage();
 
@@ -134,17 +147,27 @@ const SETTINGS_ENV = {
 const SETTINGS_BY_TRACKER = new Map();
 const settingsKey = (ctx) => ctx.guildId || ctx.apiBase;
 
+/**
+ * The env block above describes one Discord server. DISCORD_GUILD_ID says
+ * which, so a second guild that hasn't run /setup inherits nothing rather than
+ * the first group's channel — see envDefaultsFor.
+ */
+const envDefaults = (ctx) => envDefaultsFor(
+  { legacy: REGISTRY.legacy, envGuildId: DISCORD_GUILD_ID, guildId: ctx.guildId },
+  SETTINGS_ENV,
+);
+
 /** Cached /setup config for the current guild. */
 function settings() {
   const ctx = currentTracker();
-  return SETTINGS_BY_TRACKER.get(settingsKey(ctx)) || resolveSettings(null, SETTINGS_ENV);
+  return SETTINGS_BY_TRACKER.get(settingsKey(ctx)) || resolveSettings(null, envDefaults(ctx));
 }
 
 async function refreshSettings() {
   const ctx = currentTracker();
   try {
     const { settings: row } = await trackerGet('/bot-settings');
-    SETTINGS_BY_TRACKER.set(settingsKey(ctx), resolveSettings(row, SETTINGS_ENV));
+    SETTINGS_BY_TRACKER.set(settingsKey(ctx), resolveSettings(row, envDefaults(ctx)));
   } catch (err) {
     // Keep whatever we had rather than dropping to an unconfigured state.
     console.error(`Could not load bot settings for ${ctx.label}, keeping current config:`, err.message);

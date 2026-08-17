@@ -15,8 +15,10 @@ try {
 } catch (err) {
   console.warn(`Could not read aliases-seed.json (${err.message}); /api/alias-mappings will return empty.`);
 }
+const { shouldSeedAliases } = require('./seed');
 db.get('SELECT COUNT(*) AS n FROM alias_mappings', [], (err, row) => {
-  if (err || !row || row.n > 0) return;
+  if (err || !row) return;
+  if (!shouldSeedAliases(process.env, row.n)) return;
   const now = new Date().toISOString();
   const stmt = db.prepare('INSERT OR IGNORE INTO alias_mappings (alias, realName, updatedAt) VALUES (?, ?, ?)');
   for (const alias of aliasSeed.aliases) {
