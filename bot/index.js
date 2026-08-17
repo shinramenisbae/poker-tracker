@@ -26,7 +26,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags, PermissionFlagsBits } from 'discord.js';
+import { Client, GatewayIntentBits, ChannelType, ThreadAutoArchiveDuration, REST, Routes, SlashCommandBuilder, MessageFlags, PermissionFlagsBits,
+  ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
 import { GoogleGenAI, Type } from '@google/genai';
 import { classifyAttachment, attachmentTrigger } from './triage.js';
 import { createKeyedSerializer } from './serialize.js';
@@ -38,6 +39,7 @@ import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js
 import { resolveSettings, isConfigured, envDefaultsFor } from './settings.js';
 import { buildRegistry, trackerFor } from './registry.js';
 import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
+import { validateRoleNames, resolveRoleName, canAssign, membersNeedingRole } from './roles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1059,6 +1061,22 @@ const SETUP_COMMAND = new SlashCommandBuilder()
       .setRequired(false)
   );
 
+// /setup-roles — the bot creates the roles instead of the owner. A modal is the
+// only Discord surface that prompts for free text, and it must be the FIRST
+// response to an interaction (it cannot follow a deferral), which is why this
+// can't be an option on /setup — whose role options are pickers anyway.
+const SETUP_ROLES_COMMAND = new SlashCommandBuilder()
+  .setName('setup-roles')
+  .setDescription('Create this server\'s poker roles and hand out the results ping role.')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+  .setDMPermission(false);
+
+const ROLE_FIELDS = [
+  { id: 'poker_role_name', label: 'Results ping role', value: 'Poker', key: 'poker', setting: 'pokerRoleId' },
+  { id: 'hot_role_name', label: 'Running Hot role', value: 'Running Hot', key: 'hot', setting: 'hotRoleId' },
+  { id: 'cold_role_name', label: 'Running Cold role', value: 'Running Cold', key: 'cold', setting: 'coldRoleId' },
+];
+
 const SETTINGS_COMMAND = new SlashCommandBuilder()
   .setName('settings')
   .setDescription('Show the bot\'s current configuration for this server.')
@@ -1075,10 +1093,10 @@ async function registerSlashCommands() {
     await rest.put(Routes.applicationCommands(DISCORD_APP_ID), {
       body: [
         PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON(), LINK_COMMAND.toJSON(),
-        SETUP_COMMAND.toJSON(), SETTINGS_COMMAND.toJSON(),
+        SETUP_COMMAND.toJSON(), SETTINGS_COMMAND.toJSON(), SETUP_ROLES_COMMAND.toJSON(),
       ],
     });
-    console.log('Registered /paid, /unpaid, /link, /setup and /settings slash commands.');
+    console.log('Registered /paid, /unpaid, /link, /setup, /settings and /setup-roles slash commands.');
   } catch (err) {
     console.error('Slash command registration failed:', err.message);
   }
@@ -1303,7 +1321,127 @@ function describeSettings() {
     !isConfigured(s)
       ? '\n⚠️ No channel set yet — run `/setup channel:#your-poker-channel` to switch the bot on.'
       : '',
+    // The cost of /setup-roles being its own command is discoverability, so
+    // point at it exactly when it would help.
+    !s.pokerRoleId && !s.hotRoleId && !s.coldRoleId
+      ? '\nℹ️ No roles set — run `/setup-roles` and I\'ll create them for you.'
+      : '',
   ].filter(Boolean).join('\n');
+}
+
+// Opens the modal. No tracker calls here — a modal must be the immediate
+// response, so there is nothing to defer and nothing slow to do first.
+async function handleSetupRolesCommand(interaction) {
+  const modal = new ModalBuilder().setCustomId('setup-roles').setTitle('Set up poker roles');
+  for (const f of ROLE_FIELDS) {
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId(f.id)
+        .setLabel(f.label)
+        .setStyle(TextInputStyle.Short)
+        .setValue(f.value)
+        .setRequired(false)
+        .setMaxLength(100)
+    ));
+  }
+  return interaction.showModal(modal);
+}
+
+// The submit is a fresh interaction, so this one can defer and take its time.
+async function handleSetupRolesSubmit(interaction) {
+  const { ok, names, error } = validateRoleNames(
+    Object.fromEntries(ROLE_FIELDS.map((f) => [f.key, interaction.fields.getTextInputValue(f.id)]))
+  );
+  if (!ok) {
+    return interaction.reply({ content: `⚠️ ${error}`, flags: MessageFlags.Ephemeral });
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const guild = interaction.guild;
+  const me = guild.members.me || await guild.members.fetchMe();
+  if (!me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    return respond(interaction, {
+      content: '⚠️ I need the **Manage Roles** permission to do this. Nothing was changed.',
+    });
+  }
+  const botTop = me.roles.highest.position;
+
+  // Resolve every name before writing anything, so a failure part-way through
+  // doesn't leave the server with some roles made and others not.
+  const existing = [...guild.roles.cache.values()];
+  const resolved = [];
+  for (const f of ROLE_FIELDS) {
+    if (!names[f.key]) continue;
+    const found = resolveRoleName(existing, names[f.key]);
+    try {
+      const role = found.action === 'reuse'
+        ? found.role
+        : await guild.roles.create({ name: names[f.key], reason: `/setup-roles by ${interaction.user.tag}` });
+      resolved.push({ ...f, role, action: found.action });
+    } catch (err) {
+      return respond(interaction, {
+        content: `⚠️ Couldn't create **${names[f.key]}**: ${err.message}. Nothing else was changed.`,
+      });
+    }
+  }
+
+  // Save the ids first — the roles exist and are worth keeping even if handing
+  // the ping role out below runs into trouble.
+  const update = { guildId: interaction.guildId, guildName: guild.name || null };
+  for (const r of resolved) update[r.setting] = r.role.id;
+  try {
+    await trackerPut('/bot-settings', update);
+    await refreshSettings();
+  } catch (err) {
+    return respond(interaction, { content: `⚠️ Roles are ready but saving them failed: ${err.message}` });
+  }
+
+  const lines = resolved.map((r) => {
+    const how = r.action === 'reuse' ? 'reused existing' : 'created';
+    // A role the bot made is always below its own; a reused one may not be, and
+    // the bot cannot promote itself to fix that.
+    const warn = canAssign(r.role, botTop) ? '' : ' — ⚠️ sits above my role, move it below or I can\'t assign it';
+    return `• **${r.label}:** <@&${r.role.id}> _(${how})_${warn}`;
+  });
+
+  const ping = resolved.find((r) => r.key === 'poker');
+  if (ping) lines.push(await assignPingRole(guild, ping.role, botTop));
+
+  return respond(interaction, {
+    content: `✅ **Roles set up**\n${lines.join('\n')}`,
+    allowedMentions: { parse: [] },
+  });
+}
+
+/** Hand the results ping role to every human who doesn't have it yet. */
+async function assignPingRole(guild, role, botTop) {
+  if (!canAssign(role, botTop)) {
+    return '• _Ping role not handed out — it sits above my role._';
+  }
+  let all;
+  try {
+    all = await guild.members.fetch();
+  } catch (err) {
+    // Almost always the Server Members intent being off; that's an operator fix.
+    return `• _Couldn't read the member list (${err.message}) — role created but not handed out._`;
+  }
+
+  const needing = membersNeedingRole(
+    all.map((m) => ({ id: m.id, isBot: Boolean(m.user?.bot), roleIds: [...m.roles.cache.keys()] })),
+    role.id,
+  );
+  const already = all.filter((m) => !m.user?.bot).size - needing.length;
+
+  let added = 0;
+  let failed = 0;
+  for (const m of needing) {
+    // One member failing (hierarchy, or they left mid-run) must not cost
+    // everyone else theirs.
+    try { await all.get(m.id).roles.add(role, 'Poker results ping role'); added += 1; }
+    catch { failed += 1; }
+  }
+  return `• _Ping role: ${added} member(s) added, ${already} already had it${failed ? `, ${failed} failed` : ''}._`;
 }
 
 async function handleSettingsCommand(interaction) {
@@ -1568,10 +1706,39 @@ function scheduleDailyReminders({ reason = '' } = {}) {
 
 // -------- Discord event wiring --------
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  // GuildMembers is privileged and enabled in the Developer Portal. Without
+  // it guild.members.fetch() returns only cached members, so /setup-roles
+  // would silently under-assign the ping role.
+  intents: [
+    GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers,
+  ],
 });
 
+async function handleModalSubmit(interaction) {
+  const handlers = { 'setup-roles': handleSetupRolesSubmit };
+  const handler = handlers[interaction.customId];
+  if (!handler) return;
+
+  const ctx = trackerForGuild(interaction.guildId);
+  if (!ctx) {
+    return interaction.reply({
+      content: '⚠️ This server isn\'t set up with a poker tracker yet. Ask the bot operator to register it.',
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+  }
+  try {
+    await withGuild(ctx, () => handler(interaction));
+  } catch (err) {
+    console.error(`modal ${interaction.customId} error (${ctx.label}):`, err);
+    await respond(interaction, { content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+  }
+}
+
 client.on('interactionCreate', async (interaction) => {
+  // Modal submits are their own interaction type and need the same guild
+  // resolution as the command that opened them.
+  if (interaction.isModalSubmit()) return handleModalSubmit(interaction);
   if (!interaction.isChatInputCommand()) return;
   const handlers = {
     paid: handlePaidCommand,
@@ -1579,6 +1746,7 @@ client.on('interactionCreate', async (interaction) => {
     link: handleLinkCommand,
     setup: handleSetupCommand,
     settings: handleSettingsCommand,
+    'setup-roles': handleSetupRolesCommand,
   };
   const handler = handlers[interaction.commandName];
   if (!handler) return;
