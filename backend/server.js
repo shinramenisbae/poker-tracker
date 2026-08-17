@@ -8,17 +8,14 @@ const app = express();
 const PORT = Number(process.env.PORT) || 5001;
 
 // --- Alias seeding (one-shot on first start of an empty table) ---
+// SEED_ALIASES=0 loads nothing, so a second group's tracker inherits neither
+// the seeded rows nor the canonical names folded in by /api/alias-mappings.
 const ALIAS_SEED_PATH = path.join(__dirname, 'aliases-seed.json');
-let aliasSeed = { aliases: [], canonical_players: [], initial_mappings: {} };
-try {
-  aliasSeed = JSON.parse(fs.readFileSync(ALIAS_SEED_PATH, 'utf8'));
-} catch (err) {
-  console.warn(`Could not read aliases-seed.json (${err.message}); /api/alias-mappings will return empty.`);
-}
-const { shouldSeedAliases } = require('./seed');
+const { loadAliasSeed } = require('./seed');
+const aliasSeed = loadAliasSeed(process.env, () => fs.readFileSync(ALIAS_SEED_PATH, 'utf8'));
 db.get('SELECT COUNT(*) AS n FROM alias_mappings', [], (err, row) => {
-  if (err || !row) return;
-  if (!shouldSeedAliases(process.env, row.n)) return;
+  if (err || !row || row.n > 0) return;
+  if (aliasSeed.aliases.length === 0) return;
   const now = new Date().toISOString();
   const stmt = db.prepare('INSERT OR IGNORE INTO alias_mappings (alias, realName, updatedAt) VALUES (?, ?, ?)');
   for (const alias of aliasSeed.aliases) {
