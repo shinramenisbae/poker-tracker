@@ -14,6 +14,7 @@
 // session's `notes` field:
 //   - "Imported from Discord (threadId=X)"        → online session already imported
 //   - "Announced on Discord (threadId=X)"         → session already announced
+import { AsyncLocalStorage } from 'node:async_hooks';
 import dotenv from 'dotenv';
 // Loads bot/.env by default. A second instance runs from this same checkout, so
 // it sets BOT_ENV_FILE to its own file — otherwise dotenv would quietly fill any
@@ -35,6 +36,7 @@ import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
 import { resolveSettings, isConfigured } from './settings.js';
+import { buildRegistry, trackerFor } from './registry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -62,17 +64,63 @@ const {
   DISCORD_COLD_ROLE_ID = '',
 } = process.env;
 
-// Bootstrap-only: the bot can't log in or reach the tracker without these, so
-// they must come from the environment. Everything Discord-side (channel, roles,
-// reminder time, chip divisor) is set by the server owner with /setup instead —
-// see resolveSettings() and the SETTINGS cache below.
-for (const [k, v] of Object.entries({ DISCORD_TOKEN, TRACKER_API_BASE, TRACKER_UI_BASE, GEMINI_API_KEY })) {
+// Bootstrap-only: the bot can't log in without these. Tracker URLs come from
+// the registry (GUILD_TRACKERS, or the legacy TRACKER_API_BASE pair), and
+// everything Discord-side is set per server with /setup.
+for (const [k, v] of Object.entries({ DISCORD_TOKEN, GEMINI_API_KEY })) {
   if (!v) { console.error(`Missing env var: ${k}`); process.exit(1); }
 }
 
-// Effective config = whatever /setup stored, layered over the env vars. Cached
-// in memory and refreshed on startup and after each /setup, so the hot paths
-// (message handling, reminders) stay synchronous.
+// -------- per-guild context --------
+//
+// One process can serve several Discord servers, each backed by its own tracker
+// (its own database). Rather than threading a guild argument through all ~31
+// functions that talk to a tracker — where a single missed call site would
+// silently read or write ANOTHER group's data — the active guild is carried in
+// an AsyncLocalStorage established at each entry point (message, interaction,
+// HTTP request, scheduled job). It propagates through awaits and timers, stays
+// isolated across concurrent guilds, and is simply absent outside a context, so
+// a stray call throws loudly instead of hitting the wrong tracker.
+let REGISTRY;
+try {
+  REGISTRY = buildRegistry(process.env);
+} catch (err) {
+  console.error(`Tracker registry misconfigured: ${err.message}`);
+  process.exit(1);
+}
+if (REGISTRY.entries.length === 0) {
+  console.error('No tracker configured. Set GUILD_TRACKERS, or TRACKER_API_BASE for a single server.');
+  process.exit(1);
+}
+console.log(
+  REGISTRY.legacy
+    ? `Tracker: single (${REGISTRY.entries[0].apiBase}).`
+    : `Trackers: ${REGISTRY.entries.map((e) => `${e.label}→${e.apiBase}`).join(', ')}.`
+);
+
+const guildContext = new AsyncLocalStorage();
+
+/** The tracker for the guild whose work we're currently doing. */
+function currentTracker() {
+  const ctx = guildContext.getStore();
+  if (!ctx || !ctx.apiBase) {
+    throw new Error('No guild context: a tracker call was made outside withGuild()');
+  }
+  return ctx;
+}
+
+/** Run fn with a guild's tracker as the ambient context. */
+function withGuild(ctx, fn) {
+  return guildContext.run(ctx, fn);
+}
+
+/** Resolve a guild id to its tracker; null when the guild isn't ours to serve. */
+function trackerForGuild(guildId) {
+  return trackerFor(REGISTRY, guildId);
+}
+
+// Per-guild /setup config, keyed by tracker (each guild's settings live in that
+// guild's own database, so there's no cross-guild mixing here either).
 const SETTINGS_ENV = {
   DISCORD_CHANNEL_ID,
   DISCORD_POKER_ROLE_ID,
@@ -82,17 +130,25 @@ const SETTINGS_ENV = {
   PAYMENT_REMINDER_TZ,
   POKERNOW_CHIP_DIVISOR: process.env.POKERNOW_CHIP_DIVISOR,
 };
-let SETTINGS = resolveSettings(null, SETTINGS_ENV);
+const SETTINGS_BY_TRACKER = new Map();
+const settingsKey = (ctx) => ctx.guildId || ctx.apiBase;
+
+/** Cached /setup config for the current guild. */
+function settings() {
+  const ctx = currentTracker();
+  return SETTINGS_BY_TRACKER.get(settingsKey(ctx)) || resolveSettings(null, SETTINGS_ENV);
+}
 
 async function refreshSettings() {
+  const ctx = currentTracker();
   try {
-    const { settings } = await trackerGet('/bot-settings');
-    SETTINGS = resolveSettings(settings, SETTINGS_ENV);
+    const { settings: row } = await trackerGet('/bot-settings');
+    SETTINGS_BY_TRACKER.set(settingsKey(ctx), resolveSettings(row, SETTINGS_ENV));
   } catch (err) {
     // Keep whatever we had rather than dropping to an unconfigured state.
-    console.error('Could not load bot settings, keeping current config:', err.message);
+    console.error(`Could not load bot settings for ${ctx.label}, keeping current config:`, err.message);
   }
-  return SETTINGS;
+  return settings();
 }
 
 const genai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -159,12 +215,12 @@ async function classifyImage(url) {
 
 // -------- tracker API helpers --------
 async function trackerGet(path) {
-  const res = await fetch(`${TRACKER_API_BASE}${path}`);
+  const res = await fetch(`${currentTracker().apiBase}${path}`);
   if (!res.ok) throw new Error(`GET ${path} → ${res.status}: ${await res.text()}`);
   return res.json();
 }
 async function trackerPost(path, body) {
-  const res = await fetch(`${TRACKER_API_BASE}${path}`, {
+  const res = await fetch(`${currentTracker().apiBase}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -173,7 +229,7 @@ async function trackerPost(path, body) {
   return res.json();
 }
 async function trackerPut(path, body) {
-  const res = await fetch(`${TRACKER_API_BASE}${path}`, {
+  const res = await fetch(`${currentTracker().apiBase}${path}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -182,7 +238,7 @@ async function trackerPut(path, body) {
   return res.json();
 }
 async function trackerDelete(path) {
-  const res = await fetch(`${TRACKER_API_BASE}${path}`, { method: 'DELETE' });
+  const res = await fetch(`${currentTracker().apiBase}${path}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}: ${await res.text()}`);
   return res.json();
 }
@@ -307,7 +363,7 @@ function parseCsvLine(line) {
 // player_id is unique-per-session even for guests, so aggregate by that.
 // Values are in chips; divide by POKERNOW_CHIP_DIVISOR (default 100) for $.
 function parsePokernowCsv(text) {
-  const divisor = SETTINGS.chipDivisor;
+  const divisor = settings().chipDivisor;
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) return { rows: [], dateOverride: null };
   const headers = parseCsvLine(lines[0]).map((h) => h.trim());
@@ -439,7 +495,7 @@ async function processHandLogIfNeeded(thread, sessionId, handLogCsvs) {
     // Upload it.
     try {
       const text = await (await fetch(handLogCsvs[0].url)).text();
-      const res = await fetch(`${TRACKER_API_BASE}/sessions/${sessionId}/handlog`, {
+      const res = await fetch(`${currentTracker().apiBase}/sessions/${sessionId}/handlog`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rawLog: text }),
@@ -448,7 +504,7 @@ async function processHandLogIfNeeded(thread, sessionId, handLogCsvs) {
       const result = await res.json();
       await thread.send(
         `🎰 Hand log parsed: ${result.eligibleEvHands} qualifying all-in EV hands across ${result.totalHands} hands.\n` +
-        `See who's a luck box: ${TRACKER_UI_BASE}/#/session/${sessionId}/ev`
+        `See who's a luck box: ${currentTracker().uiBase}/#/session/${sessionId}/ev`
       );
     } catch (err) {
       console.error(`Hand log upload failed for ${sessionId}:`, err.message);
@@ -599,7 +655,7 @@ async function processThreadUnlocked(thread, trigger) {
       const list = uniqueUnmapped.map((a) => `\`${a}\``).join(', ');
       await thread.send(
         `🛑 Can't import yet — need someone to identify these aliases first:\n${list}\n\n` +
-        `Map them at ${TRACKER_UI_BASE}/#/aliases then post any message in this thread and I'll retry.`
+        `Map them at ${currentTracker().uiBase}/#/aliases then post any message in this thread and I'll retry.`
       );
     }
     return;
@@ -835,7 +891,7 @@ async function buildStreakSection(session) {
 // also clears the opposite role in case a past removal was missed. All role
 // ops are best-effort: a Discord permission error is logged, never thrown.
 async function applyStreakRoles(thread, transitions, sessions, sessionId) {
-  if (!SETTINGS.hotRoleId && !SETTINGS.coldRoleId) return;
+  if (!settings().hotRoleId && !settings().coldRoleId) return;
   if (transitions.length === 0 || !sessions) return;
   if (!isLatestCompletedSession(sessions, sessionId)) return;
   const guild = thread.guild;
@@ -848,8 +904,8 @@ async function applyStreakRoles(thread, transitions, sessions, sessionId) {
   }
 
   for (const t of transitions) {
-    const roleId = t.kind === 'hot' ? SETTINGS.hotRoleId : SETTINGS.coldRoleId;
-    const oppositeId = t.kind === 'hot' ? SETTINGS.coldRoleId : SETTINGS.hotRoleId;
+    const roleId = t.kind === 'hot' ? settings().hotRoleId : settings().coldRoleId;
+    const oppositeId = t.kind === 'hot' ? settings().coldRoleId : settings().hotRoleId;
     if (!roleId) continue;
     const uid = nameToUser[t.playerName];
     if (!uid) continue;
@@ -878,10 +934,10 @@ async function postResultsMessage(thread, session) {
   // Mention the poker role (if configured) so everyone gets pulled into the
   // thread. allowedMentions must explicitly list the role id or Discord
   // suppresses the ping. When unset, send a plain message with no mentions.
-  if (SETTINGS.pokerRoleId) {
+  if (settings().pokerRoleId) {
     await thread.send({
-      content: `<@&${SETTINGS.pokerRoleId}>\n${text}`,
-      allowedMentions: { roles: [SETTINGS.pokerRoleId] },
+      content: `<@&${settings().pokerRoleId}>\n${text}`,
+      allowedMentions: { roles: [settings().pokerRoleId] },
     });
   } else {
     await thread.send({ content: text, allowedMentions: { parse: [] } });
@@ -1016,7 +1072,7 @@ async function handlePaidCommand(interaction) {
   // Must be used inside a session results thread.
   const ch = interaction.channel;
   const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
-  if (!isThread || ch.parentId !== SETTINGS.channelId) {
+  if (!isThread || ch.parentId !== settings().channelId) {
     return interaction.reply({ content: '⚠️ Use `/paid` inside a session results thread.', flags: MessageFlags.Ephemeral });
   }
 
@@ -1106,7 +1162,7 @@ async function handleUnpaidCommand(interaction) {
   // Must be used inside a session results thread.
   const ch = interaction.channel;
   const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
-  if (!isThread || ch.parentId !== SETTINGS.channelId) {
+  if (!isThread || ch.parentId !== settings().channelId) {
     return interaction.reply({ content: '⚠️ Use `/unpaid` inside a session results thread.', flags: MessageFlags.Ephemeral });
   }
 
@@ -1196,7 +1252,7 @@ async function handleSetupCommand(interaction) {
 }
 
 function describeSettings() {
-  const s = SETTINGS;
+  const s = settings();
   const via = (f) => (s.source[f] === 'setup' ? '' : ' _(from server config)_');
   const line = (label, value, field) => (value
     ? `• **${label}:** ${value}${via(field)}`
@@ -1244,7 +1300,7 @@ async function handleLinkCommand(interaction) {
   const playerName = canonical.find((n) => n.toLowerCase() === named.toLowerCase());
   if (!playerName) {
     return interaction.reply({
-      content: `⚠️ No player named **${named}** in the tracker. Check the exact name at ${TRACKER_UI_BASE}/#/aliases.`,
+      content: `⚠️ No player named **${named}** in the tracker. Check the exact name at ${currentTracker().uiBase}/#/aliases.`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -1436,22 +1492,30 @@ async function runPaymentReminders({ sessionId = null } = {}) {
 // Single pending timer. /setup can re-arm this when the hour/timezone changes,
 // and the old timer MUST be cleared first — each one reschedules itself, so
 // leaving a stale one behind would multiply the daily reminders.
-let reminderTimer = null;
+// One pending timer PER GUILD — keyed so re-arming one server's reminder can't
+// cancel another's. Each is cleared before re-arming: every timer reschedules
+// itself, so a stale one left behind would multiply that guild's reminders.
+// The timer callback inherits the guild context it was created in (async
+// context propagates through timers), so it reminds the right server.
+const reminderTimers = new Map();
 
 function scheduleDailyReminders({ reason = '' } = {}) {
-  if (reminderTimer) clearTimeout(reminderTimer);
-  const hour = SETTINGS.reminderHour;
-  const tz = SETTINGS.reminderTz;
+  const ctx = currentTracker();
+  const key = settingsKey(ctx);
+  if (reminderTimers.has(key)) clearTimeout(reminderTimers.get(key));
+
+  const hour = settings().reminderHour;
+  const tz = settings().reminderTz;
   const delay = msUntilNextLocalHour(new Date(), hour, tz);
   console.log(
-    `Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz})` +
+    `[${ctx.label}] Next payment reminder in ${(delay / 3600000).toFixed(1)}h (${hour}:00 ${tz})` +
     `${reason ? ` [${reason}]` : ''}.`
   );
-  reminderTimer = setTimeout(async () => {
+  reminderTimers.set(key, setTimeout(async () => {
     try { await runPaymentReminders(); }
-    catch (err) { console.error('Daily payment reminder failed:', err.message); }
+    catch (err) { console.error(`[${ctx.label}] Daily payment reminder failed:`, err.message); }
     scheduleDailyReminders(); // reschedule for the following day
-  }, delay);
+  }, delay));
 }
 
 // -------- Discord event wiring --------
@@ -1470,10 +1534,21 @@ client.on('interactionCreate', async (interaction) => {
   };
   const handler = handlers[interaction.commandName];
   if (!handler) return;
+
+  // Which tracker does this server belong to? An unregistered server gets none,
+  // and is told so rather than silently touching another group's data.
+  const ctx = trackerForGuild(interaction.guildId);
+  if (!ctx) {
+    return interaction.reply({
+      content: '⚠️ This server isn\'t set up with a poker tracker yet. Ask the bot operator to register it.',
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => {});
+  }
+
   try {
-    await handler(interaction);
+    await withGuild(ctx, () => handler(interaction));
   } catch (err) {
-    console.error(`${interaction.commandName} command error:`, err);
+    console.error(`${interaction.commandName} command error (${ctx.label}):`, err);
     if (!interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: `⚠️ Error: ${err.message}`, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
@@ -1486,52 +1561,49 @@ client.on('messageCreate', async (msg) => {
     const ch = msg.channel;
     const isThread = [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
     if (!isThread) return;
-    if (ch.parentId !== SETTINGS.channelId) return;
 
-    // Only act on messages that actually carry work. Plain chatter ("paid",
-    // "lol", @mentions) must not trigger a re-import or hand-log re-parse —
-    // that was the duplicate-session bug.
-    const kinds = [...msg.attachments.values()].map(classifyAttachment);
-    const trigger = attachmentTrigger(kinds);
-    if (trigger) {
-      await processThread(ch, trigger);
-    } else if (await latestBotStatusIsBlock(ch, client.user.id)) {
-      // Attachment-less message, but there's a pending "🛑 can't import yet"
-      // block: treat it as the user signalling they've mapped the aliases.
-      await processThread(ch, 'retry');
-    }
-    // Otherwise: ignore.
+    const ctx = trackerForGuild(msg.guildId);
+    if (!ctx) return; // not a server we serve
+
+    await withGuild(ctx, async () => {
+      if (ch.parentId !== settings().channelId) return;
+
+      // Only act on messages that actually carry work. Plain chatter ("paid",
+      // "lol", @mentions) must not trigger a re-import or hand-log re-parse —
+      // that was the duplicate-session bug.
+      const kinds = [...msg.attachments.values()].map(classifyAttachment);
+      const trigger = attachmentTrigger(kinds);
+      if (trigger) {
+        await processThread(ch, trigger);
+      } else if (await latestBotStatusIsBlock(ch, client.user.id)) {
+        // Attachment-less message, but there's a pending "🛑 can't import yet"
+        // block: treat it as the user signalling they've mapped the aliases.
+        await processThread(ch, 'retry');
+      }
+      // Otherwise: ignore.
+    });
   } catch (err) {
     console.error('messageCreate error:', err);
   }
 });
 
-client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}.`);
-
-  // Load /setup config before anything reads it. Commands are registered even
-  // when unconfigured — /setup is how you get configured in the first place.
-  await refreshSettings();
-  await registerSlashCommands();
-  scheduleDailyReminders();
-
-  if (!isConfigured(SETTINGS)) {
+// Catch-up scan for ONE guild: process every thread in its watched channel, to
+// recover threads created/posted while the bot was offline. Runs with the
+// 'scan' trigger, which imports a thread only if it was never imported before
+// (no prior 🎲 results post) — so a session deliberately deleted between
+// restarts is NOT silently re-created.
+async function startupScanForCurrentGuild(label) {
+  if (!isConfigured(settings())) {
     console.warn(
-      'No watched channel configured. A server admin should run ' +
+      `[${label}] No watched channel configured. A server admin should run ` +
       '"/setup channel:#your-poker-channel" to switch the bot on.'
     );
     return;
   }
-
-  // Catch-up scan: process every thread in the watched channel once on startup,
-  // to recover threads created/posted while the bot was offline. Runs with the
-  // 'scan' trigger, which imports a thread only if it was never imported before
-  // (no prior 🎲 results post) — so a session deliberately deleted between
-  // restarts is NOT silently re-created.
   try {
-    const channel = await client.channels.fetch(SETTINGS.channelId);
+    const channel = await client.channels.fetch(settings().channelId);
     if (!channel || channel.type !== ChannelType.GuildText) {
-      console.warn(`Startup scan skipped: channel ${SETTINGS.channelId} is not a GuildText.`);
+      console.warn(`[${label}] Startup scan skipped: channel ${settings().channelId} is not a GuildText.`);
       return;
     }
     const threads = new Map();
@@ -1544,28 +1616,69 @@ client.once('ready', async () => {
       if (!arch.hasMore || arch.threads.size === 0) break;
       before = arch.threads.last().archivedTimestamp;
     }
-    console.log(`Startup scan: ${threads.size} threads to check.`);
+    console.log(`[${label}] Startup scan: ${threads.size} threads to check.`);
     for (const thread of threads.values()) {
       try { await processThread(thread, 'scan'); }
-      catch (err) { console.error(`Startup scan thread ${thread.id} (${thread.name}):`, err.message); }
+      catch (err) { console.error(`[${label}] Startup scan thread ${thread.id} (${thread.name}):`, err.message); }
     }
-    console.log('Startup scan complete.');
+    console.log(`[${label}] Startup scan complete.`);
   } catch (err) {
-    console.error('Startup scan failed:', err);
+    console.error(`[${label}] Startup scan failed:`, err);
+  }
+}
+
+client.once('ready', async () => {
+  console.log(`Logged in as ${client.user.tag}.`);
+
+  // Commands are global (one application), so they're registered once rather
+  // than per guild. They're registered even when a server is unconfigured —
+  // /setup is how it gets configured in the first place.
+  await registerSlashCommands();
+
+  // Each served guild loads its own /setup config, then scans independently:
+  // one guild's tracker being down must not stop the others starting up.
+  for (const ctx of REGISTRY.entries) {
+    await withGuild(ctx, async () => {
+      await refreshSettings();
+      scheduleDailyReminders({ reason: `startup ${ctx.label}` });
+      await startupScanForCurrentGuild(ctx.label);
+    });
   }
 });
 await client.login(DISCORD_TOKEN);
 
 // -------- HTTP server for in-person announcements --------
+//
+// With one bot serving several servers, every backend calls this same port, so
+// each request must say which guild it's for. Backends send ?guildId= (from
+// their own GUILD_ID env). In legacy single-tracker mode it may be omitted.
 const app = express();
 app.use(express.json());
+
+// Wraps a handler so it runs inside the caller's guild context, rejecting a
+// request that names a guild we don't serve rather than acting on the wrong
+// tracker.
+function withGuildFromRequest(handler) {
+  return async (req, res) => {
+    const guildId = req.query.guildId || (req.body && req.body.guildId) || null;
+    const ctx = trackerForGuild(guildId);
+    if (!ctx) {
+      return res.status(400).json({
+        error: guildId
+          ? `Unknown guildId ${guildId} — not registered in GUILD_TRACKERS`
+          : 'guildId required (this bot serves multiple servers)',
+      });
+    }
+    return withGuild(ctx, () => handler(req, res));
+  };
+}
 
 // Create the results thread for a session and post into it. Shared by
 // /announce and /reannounce so both produce an identical thread + message.
 async function announceSession(session) {
-  const channel = await client.channels.fetch(SETTINGS.channelId);
+  const channel = await client.channels.fetch(settings().channelId);
   if (!channel || channel.type !== ChannelType.GuildText) {
-    throw new Error(`Channel ${SETTINGS.channelId} not a text channel`);
+    throw new Error(`Channel ${settings().channelId} not a text channel`);
   }
 
   const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
@@ -1600,7 +1713,7 @@ async function unannounceSession(session) {
   let threadMissing = false;
   if (threadId) {
     const thread = await client.channels.fetch(threadId).catch(() => null);
-    if (thread && thread.isThread() && thread.parentId === SETTINGS.channelId) {
+    if (thread && thread.isThread() && thread.parentId === settings().channelId) {
       await thread.delete('Removed from the poker tracker for a corrected repost');
       deleted = true;
     } else {
@@ -1621,7 +1734,7 @@ async function unannounceSession(session) {
   return { threadId, deleted, threadMissing };
 }
 
-app.post('/announce/:sessionId', async (req, res) => {
+app.post('/announce/:sessionId', withGuildFromRequest(async (req, res) => {
   const sessionId = req.params.sessionId;
   try {
     const session = await trackerGet(`/sessions/${sessionId}`);
@@ -1641,11 +1754,11 @@ app.post('/announce/:sessionId', async (req, res) => {
     console.error('announce error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
-});
+}));
 
 // POST /unannounce/:sessionId — delete the posted thread and clear the markers,
 // leaving the session postable again. Safe when nothing was announced.
-app.post('/unannounce/:sessionId', async (req, res) => {
+app.post('/unannounce/:sessionId', withGuildFromRequest(async (req, res) => {
   const sessionId = req.params.sessionId;
   try {
     const session = await trackerGet(`/sessions/${sessionId}`);
@@ -1655,13 +1768,13 @@ app.post('/unannounce/:sessionId', async (req, res) => {
     console.error('unannounce error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
-});
+}));
 
 // POST /reannounce/:sessionId — delete the old thread and post a fresh one in a
 // single call. Done bot-side so the UI can't half-fail between two requests,
 // and the session is re-fetched in between so the new post carries the
 // corrected numbers (the whole point of reposting).
-app.post('/reannounce/:sessionId', async (req, res) => {
+app.post('/reannounce/:sessionId', withGuildFromRequest(async (req, res) => {
   const sessionId = req.params.sessionId;
   try {
     const before = await trackerGet(`/sessions/${sessionId}`);
@@ -1679,7 +1792,7 @@ app.post('/reannounce/:sessionId', async (req, res) => {
     console.error('reannounce error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
-});
+}));
 
 app.get('/health', (req, res) => res.json({ ok: true, user: client.user?.tag }));
 
@@ -1692,7 +1805,7 @@ app.get('/health', (req, res) => res.json({ ok: true, user: client.user?.tag }))
 // ?clean=true first deletes the bot's prior 🎲 results post(s) in the thread, so
 // refreshing doesn't pile up duplicates. Only the bot's own results messages are
 // removed — human chatter and other bot posts (🎰 hand log, 🛑 blocks) are left.
-app.post('/repost/:sessionId', async (req, res) => {
+app.post('/repost/:sessionId', withGuildFromRequest(async (req, res) => {
   const sessionId = req.params.sessionId;
   const clean = req.query.clean === 'true';
   try {
@@ -1708,9 +1821,9 @@ app.post('/repost/:sessionId', async (req, res) => {
     }
     let createdThread = false;
     if (!thread) {
-      const channel = await client.channels.fetch(SETTINGS.channelId);
+      const channel = await client.channels.fetch(settings().channelId);
       if (!channel || channel.type !== ChannelType.GuildText) {
-        return res.status(500).json({ error: `Channel ${SETTINGS.channelId} not a text channel` });
+        return res.status(500).json({ error: `Channel ${settings().channelId} not a text channel` });
       }
       const threadName = `${session.date} ${session.gameType === 'online' ? 'online' : 'in-person'} results`;
       thread = await channel.threads.create({
@@ -1735,11 +1848,11 @@ app.post('/repost/:sessionId', async (req, res) => {
     console.error('repost error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
-});
+}));
 
 // Manually trigger the unpaid-debt reminder for every session that still has
 // outstanding bank transfers. Same content as the daily 10:00 NZ job.
-app.post('/remind', async (req, res) => {
+app.post('/remind', withGuildFromRequest(async (req, res) => {
   try {
     const result = await runPaymentReminders();
     res.json({ ok: true, ...result });
@@ -1747,12 +1860,12 @@ app.post('/remind', async (req, res) => {
     console.error('remind error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
-});
+}));
 
 // Manually trigger the reminder for one specific session. 404 if the session id
 // isn't found; otherwise the response notes whether the thread was actually
 // pinged (e.g. skipped:no unpaid means everyone's already settled).
-app.post('/remind/:sessionId', async (req, res) => {
+app.post('/remind/:sessionId', withGuildFromRequest(async (req, res) => {
   try {
     const result = await runPaymentReminders({ sessionId: req.params.sessionId });
     res.json({ ok: true, ...result });
@@ -1761,7 +1874,7 @@ app.post('/remind/:sessionId', async (req, res) => {
     const status = /not found/i.test(err.message) ? 404 : 500;
     res.status(status).json({ error: err.message || String(err) });
   }
-});
+}));
 
 app.listen(Number(BOT_HTTP_PORT), '127.0.0.1', () => {
   console.log(`Bot HTTP listening on http://127.0.0.1:${BOT_HTTP_PORT}`);

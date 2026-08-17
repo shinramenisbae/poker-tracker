@@ -1510,11 +1510,19 @@ app.delete('/api/players/:name', (req, res) => {
 // fetch will fail with "bad port". Default 6300 matches the bot's .env.example.
 const BOT_BASE = process.env.BOT_BASE || 'http://127.0.0.1:6300';
 
+// One bot process can serve several Discord servers, so every forwarded call
+// carries this instance's guild id — otherwise the bot couldn't tell which
+// server (and which tracker) the request belongs to. Unset is fine for a bot
+// in legacy single-tracker mode.
+const GUILD_ID = (process.env.GUILD_ID || '').trim();
+
 // Shared forwarder for the bot's localhost endpoints.
 function forwardToBot(botPath) {
   return async (req, res) => {
     try {
-      const botRes = await fetch(`${BOT_BASE}${botPath(req)}`, {
+      const path = botPath(req);
+      const url = `${BOT_BASE}${path}${GUILD_ID ? `${path.includes('?') ? '&' : '?'}guildId=${encodeURIComponent(GUILD_ID)}` : ''}`;
+      const botRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });

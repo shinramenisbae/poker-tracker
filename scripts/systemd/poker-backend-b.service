@@ -1,5 +1,5 @@
 [Unit]
-Description=Tribe Poker Tracker backend — instance B (second group)
+Description=Tribe Poker Tracker backend — second group
 After=network-online.target
 Wants=network-online.target
 
@@ -10,13 +10,19 @@ ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
 
-# Instance B's isolation. All three default to instance A's values when unset,
-# so every one of these MUST be set here.
+# This group's isolation. Each of these defaults to the FIRST group's value when
+# unset, so every one must be set here.
 Environment=PORT=5002
 Environment=POKER_DB=/srv/poker-b/poker.db
 Environment=CORS_ORIGINS=https://poker-b.example.com
-# Point the backend's Discord passthrough at instance B's bot, not A's.
-Environment=BOT_BASE=http://127.0.0.1:6301
+
+# Which Discord server this tracker belongs to. One bot process serves every
+# server, so it can't tell which tracker a request is for unless the backend
+# says — forwarded /announce, /repost etc. carry this id.
+Environment=GUILD_ID=REPLACE_WITH_DISCORD_SERVER_ID
+
+# The SHARED bot (there is only one process), so this stays the default 6300.
+# Environment=BOT_BASE=http://127.0.0.1:6300
 
 [Install]
 WantedBy=multi-user.target
