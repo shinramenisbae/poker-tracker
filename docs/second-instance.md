@@ -49,29 +49,42 @@ Two processes running the same bot token both hold a gateway connection and both
 receive every event — you'd get duplicate imports and double replies. Create a
 new application in the Developer Portal with its own token and Application ID.
 
+## ⚠️ The one that will bite you: `BOT_ENV_FILE`
+
+Instance B runs from the **same checkout** as instance A, and `dotenv` fills any
+variable the environment doesn't already define from `bot/.env` — instance A's
+config. Omit one value from B's config and it silently inherits A's. If that
+value is `DISCORD_TOKEN`, you get two processes on one bot token: duplicate
+imports and double replies, with nothing in the logs saying why.
+
+So instance B sets `BOT_ENV_FILE=/srv/poker-b/bot.env`, which makes dotenv load
+**only** that file. It must therefore be complete — start from
+`scripts/poker-b.env.example`, which lists every variable.
+
 ## Setup
 
 ```bash
-# 1. Data dir for instance B
+cd /root/.openclaw/workspace/poker-tracker
+
+# 1. Data dir + bot config for instance B
 mkdir -p /srv/poker-b
+cp scripts/poker-b.env.example /srv/poker-b/bot.env
+chmod 600 /srv/poker-b/bot.env          # contains a bot token
+$EDITOR /srv/poker-b/bot.env            # fill in every value
 
-# 2. Backend service (copy the existing unit, add env + a distinct name)
-#    systemctl edit --force --full tribe-poker-backend-b.service
-#    [Service]
-#    Environment=PORT=5002
-#    Environment=POKER_DB=/srv/poker-b/poker.db
-#    Environment=CORS_ORIGINS=https://poker-b.example.com
-#    WorkingDirectory=/root/.openclaw/workspace/poker-tracker/backend
-#    ExecStart=/usr/bin/node server.js
-
-# 3. Bot service — same code, its own env file
-#    cp bot/.env bot/.env.b   # then edit every value in the table above
-#    systemctl edit --force --full tribe-poker-bot-b.service
-#    (ExecStart with an EnvironmentFile pointing at bot/.env.b)
+# 2. Services (edit the placeholder hostname/paths in both first)
+cp scripts/systemd/poker-backend-b.service /etc/systemd/system/tribe-poker-backend-b.service
+cp scripts/systemd/poker-bot-b.service     /etc/systemd/system/tribe-poker-bot-b.service
+$EDITOR /etc/systemd/system/tribe-poker-backend-b.service   # CORS_ORIGINS, paths
 
 systemctl daemon-reload
 systemctl enable --now tribe-poker-backend-b.service tribe-poker-bot-b.service
+systemctl status tribe-poker-backend-b.service tribe-poker-bot-b.service --no-pager
 ```
+
+Expected in `journalctl -u tribe-poker-bot-b.service`:
+`Registered /paid, /unpaid and /link slash commands.` and
+`Next payment reminder in N.Nh (10:00 Pacific/Auckland).`
 
 ### nginx
 
@@ -93,14 +106,32 @@ server {
 timer with `Environment=POKER_DB=/srv/poker-b/poker.db` and a distinct
 `POKER_BACKUP_DIR`.
 
-## Known gap: CI only deploys instance A
+## Deploying instance B
 
-`deploy.sh` hardcodes instance A's paths and restarts
-`tribe-poker-backend.service`, so a merge to `main` will **not** update instance
-B. Until that's parameterised, after each deploy run:
+CI deploys instance A only. `deploy.sh` now takes overrides, so instance B is
+one extra command after each deploy (`SKIP_BUILD=1` reuses the build CI just
+produced — both instances run identical frontend code):
 
 ```bash
 cd /root/.openclaw/workspace/poker-tracker
-cp -r app/dist/* /var/www/poker-tracker-b/
-systemctl restart tribe-poker-backend-b.service tribe-poker-bot-b.service
+WEB_ROOT=/var/www/poker-tracker-b \
+BACKEND_SERVICE=tribe-poker-backend-b.service \
+BOT_SERVICE=tribe-poker-bot-b.service \
+SKIP_BUILD=1 \
+  bash deploy.sh
 ```
+
+Worth wiring into the CI deploy step once instance B is proven; left manual for
+now so a second-instance problem can't fail instance A's deploy.
+
+## Checklist
+
+- [ ] Second Discord application created (own token + Application ID)
+- [ ] Invited to the second server with `bot applications.commands`, and
+      Manage Roles + Manage Threads
+- [ ] `/srv/poker-b/bot.env` complete (from `scripts/poker-b.env.example`), `chmod 600`
+- [ ] Both systemd units installed, hostname/paths edited, enabled and active
+- [ ] nginx server block for the new hostname + TLS cert
+- [ ] Backup timer for `/srv/poker-b/poker.db`
+- [ ] Sanity check: `curl -s localhost:5002/api/sessions` returns `[]`
+      (a fresh, empty DB — **not** instance A's sessions)

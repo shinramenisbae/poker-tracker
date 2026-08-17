@@ -14,7 +14,13 @@
 // session's `notes` field:
 //   - "Imported from Discord (threadId=X)"        → online session already imported
 //   - "Announced on Discord (threadId=X)"         → session already announced
-import 'dotenv/config';
+import dotenv from 'dotenv';
+// Loads bot/.env by default. A second instance runs from this same checkout, so
+// it sets BOT_ENV_FILE to its own file — otherwise dotenv would quietly fill any
+// variable that instance's config omits from the FIRST instance's bot/.env
+// (inheriting its DISCORD_TOKEN means two processes on one token: duplicate
+// imports and double replies).
+dotenv.config(process.env.BOT_ENV_FILE ? { path: process.env.BOT_ENV_FILE } : {});
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';

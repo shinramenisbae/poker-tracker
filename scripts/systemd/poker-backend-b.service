@@ -1,0 +1,22 @@
+[Unit]
+Description=Tribe Poker Tracker backend — instance B (second group)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/workspace/poker-tracker/backend
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+# Instance B's isolation. All three default to instance A's values when unset,
+# so every one of these MUST be set here.
+Environment=PORT=5002
+Environment=POKER_DB=/srv/poker-b/poker.db
+Environment=CORS_ORIGINS=https://poker-b.example.com
+# Point the backend's Discord passthrough at instance B's bot, not A's.
+Environment=BOT_BASE=http://127.0.0.1:6301
+
+[Install]
+WantedBy=multi-user.target
