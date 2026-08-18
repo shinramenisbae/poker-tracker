@@ -173,6 +173,18 @@ db.serialize(() => {
     // Ignore error if column already exists
   });
 
+  // Migration: settlement bookkeeping. settledAt records that the bank player
+  // has been paid by every loser AND has paid the winners out — the second leg
+  // of the money, which nothing else tracks. Deliberately separate from
+  // `status`, which means the GAME finished (everyone cashed out); a session is
+  // routinely completed for a week while the bank chases transfers.
+  db.run(`ALTER TABLE sessions ADD COLUMN settledAt TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
+  db.run(`ALTER TABLE sessions ADD COLUMN settledBy TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
+
   // Migration: rebuy context. rebuyType is 'top-up' (added chips while still
   // stacked) or 'stacked' (lost the full stack and re-bought); stackedHand is
   // the optional hand they got stacked with (e.g. "AA", "KK vs 76s").

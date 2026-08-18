@@ -40,6 +40,8 @@ import { resolveSettings, isConfigured, envDefaultsFor } from './settings.js';
 import { buildRegistry, trackerFor } from './registry.js';
 import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
 import { validateRoleNames, resolveRoleName, assignability, membersNeedingRole } from './roles.js';
+import { canFinish } from './settle.js';
+import { helpText } from './help.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -290,6 +292,12 @@ async function getSessionPayments(sessionId) {
 }
 async function markPaid(sessionId, playerName, paidBy) {
   return trackerPut(`/sessions/${sessionId}/payments/${encodeURIComponent(playerName)}`, { paidBy });
+}
+async function settleSession(sessionId, settledBy) {
+  return trackerPost(`/sessions/${sessionId}/settle`, { settledBy });
+}
+async function unsettleSession(sessionId) {
+  return trackerDelete(`/sessions/${sessionId}/settle`);
 }
 async function markUnpaid(sessionId, playerName) {
   return trackerDelete(`/sessions/${sessionId}/payments/${encodeURIComponent(playerName)}`);
@@ -962,7 +970,13 @@ async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
   const bankAccounts = await fetchBankAccounts();
   const streaks = await buildStreakSection(session);
-  const text = formatResultsMessage(session, results, bankAccounts) + streaks.text;
+  const body = formatResultsMessage(session, results, bankAccounts) + streaks.text;
+  // A help command nobody thinks to run is worth nothing, so point at it from
+  // the one message everyone reads. Only when it fits: Discord hard-caps a
+  // message at 2000 characters and a big session already runs close, so the
+  // hint gives way rather than costing someone their results.
+  const hint = ['', '', '_New here? Run `/help`._'].join('\n');
+  const text = body.length + hint.length <= 2000 ? body + hint : body;
 
   // Mention the poker role (if configured) so everyone gets pulled into the
   // thread. allowedMentions must explicitly list the role id or Discord
@@ -1068,6 +1082,32 @@ const SETUP_COMMAND = new SlashCommandBuilder()
       .setRequired(false)
   );
 
+// /finish — the bank player closes the books once every loser has paid them
+// AND they have paid the winners out. That second leg is otherwise untracked.
+const FINISH_COMMAND = new SlashCommandBuilder()
+  .setName('finish')
+  .setDescription('Mark this session as fully settled — everyone paid, winners paid out.')
+  .setDMPermission(false)
+  .addBooleanOption((o) =>
+    o.setName('reopen')
+      .setDescription('Undo a previous /finish and reopen the books.')
+      .setRequired(false));
+
+// /help — the sequence, not a command list. Discord's picker already lists
+// commands; what it can't say is the order, or this server's own settings.
+const HELP_COMMAND = new SlashCommandBuilder()
+  .setName('help')
+  .setDescription('How to use the poker bot.')
+  .setDMPermission(false)
+  .addStringOption((o) =>
+    o.setName('topic')
+      .setDescription('Which guide to show (defaults to players).')
+      .setRequired(false)
+      .addChoices(
+        { name: 'player — playing and paying', value: 'player' },
+        { name: 'admin — setting the bot up', value: 'admin' },
+      ));
+
 // /setup-roles — the bot creates the roles instead of the owner. A modal is the
 // only Discord surface that prompts for free text, and it must be the FIRST
 // response to an interaction (it cannot follow a deferral), which is why this
@@ -1101,9 +1141,10 @@ async function registerSlashCommands() {
       body: [
         PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON(), LINK_COMMAND.toJSON(),
         SETUP_COMMAND.toJSON(), SETTINGS_COMMAND.toJSON(), SETUP_ROLES_COMMAND.toJSON(),
+        FINISH_COMMAND.toJSON(), HELP_COMMAND.toJSON(),
       ],
     });
-    console.log('Registered /paid, /unpaid, /link, /setup, /settings and /setup-roles slash commands.');
+    console.log('Registered /paid, /unpaid, /link, /setup, /settings, /setup-roles, /finish and /help slash commands.');
   } catch (err) {
     console.error('Slash command registration failed:', err.message);
   }
@@ -1458,6 +1499,73 @@ async function assignPingRole(guild, role, isAssignable) {
   return `• _Ping role: ${added} member(s) added, ${already} already had it${failed ? `, ${failed} failed` : ''}._`;
 }
 
+// /finish — record that the bank player has settled up both ways.
+async function handleFinishCommand(interaction) {
+  const ch = interaction.channel;
+  const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
+  if (!isThread || ch.parentId !== settings().channelId) {
+    return interaction.reply({ content: '⚠️ Use `/finish` inside a session results thread.', flags: MessageFlags.Ephemeral });
+  }
+
+  // Tracker calls from here on; claim the interaction first.
+  await interaction.deferReply();
+
+  const session = await findSessionByThreadId(ch.id);
+  if (!session) {
+    return respond(interaction, { content: "⚠️ Couldn't find a session for this thread." });
+  }
+
+  const reopen = interaction.options.getBoolean('reopen') || false;
+  const [payments, links] = await Promise.all([getSessionPayments(session.id), getDiscordLinks()]);
+
+  const verdict = canFinish({
+    session,
+    callerPlayerName: links[interaction.user.id] || null,
+    isAdmin: Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)),
+    paidNames: new Set(Object.keys(payments)),
+    alreadySettled: Boolean(session.settledAt),
+    reopen,
+  });
+  if (!verdict.ok) {
+    return respond(interaction, { content: `⚠️ ${verdict.reason}`, allowedMentions: { parse: [] } });
+  }
+
+  const who = links[interaction.user.id] || interaction.user.username;
+  try {
+    if (reopen) await unsettleSession(session.id);
+    else await settleSession(session.id, who);
+  } catch (err) {
+    // Never claim the books are closed on a write that failed.
+    return respond(interaction, { content: `⚠️ Couldn't ${reopen ? 'reopen' : 'settle'} this session: ${err.message}` });
+  }
+
+  if (reopen) {
+    return respond(interaction, {
+      content: `🔓 **${session.date}** reopened by **${who}** — no longer marked as settled.`,
+      allowedMentions: { parse: [] },
+    });
+  }
+  return respond(interaction, {
+    content: `🏁 **${session.date} — settled.** Everyone has paid the bank`
+      + `${verdict.bank ? ` (**${verdict.bank}**)` : ''}, and the winners have been paid out.`
+      + `\n_Closed by ${who}. Undo with \`/finish reopen:true\`._`,
+    allowedMentions: { parse: [] },
+  });
+}
+
+// /help — no tracker calls, so it answers immediately.
+async function handleHelpCommand(interaction) {
+  return interaction.reply({
+    content: helpText({
+      topic: interaction.options.getString('topic') || 'player',
+      settings: settings(),
+      uiBase: currentTracker().uiBase,
+    }),
+    flags: MessageFlags.Ephemeral,
+    allowedMentions: { parse: [] },
+  });
+}
+
 async function handleSettingsCommand(interaction) {
   // Ephemeral from the outset: deferring fixes visibility, so it must be
   // claimed here rather than on the reply below.
@@ -1761,6 +1869,8 @@ client.on('interactionCreate', async (interaction) => {
     setup: handleSetupCommand,
     settings: handleSettingsCommand,
     'setup-roles': handleSetupRolesCommand,
+    finish: handleFinishCommand,
+    help: handleHelpCommand,
   };
   const handler = handlers[interaction.commandName];
   if (!handler) return;
