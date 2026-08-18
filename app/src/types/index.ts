@@ -9,6 +9,10 @@ export interface Session {
   notes: string;
   gameType: 'in-person' | 'online';
   discordThreadId: string | null;
+  /** Set once the bank player has been paid by everyone AND paid the winners
+   *  out. Distinct from `status`, which only means the game itself finished. */
+  settledAt: string | null;
+  settledBy: string | null;
 }
 
 export interface Player {

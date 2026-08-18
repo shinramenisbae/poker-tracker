@@ -41,13 +41,21 @@ export function SessionCard({ session, onClick, onDelete, isConfirmingDelete }: 
             {formatDate(session.date)}
           </p>
         </div>
-        <span
-          className={`badge ${
-            session.status === 'active' ? 'badge-active' : 'badge-completed'
-          }`}
-        >
-          {session.status === 'active' ? 'Active' : 'Completed'}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`badge ${
+              session.status === 'active' ? 'badge-active' : 'badge-completed'
+            }`}
+          >
+            {session.status === 'active' ? 'Active' : 'Completed'}
+          </span>
+          {/* Two different questions: did the game end, and did the money move. */}
+          {session.settledAt && (
+            <span className="badge-settled" title={`Settled by ${session.settledBy ?? 'unknown'}`}>
+              Settled
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4 mt-4">

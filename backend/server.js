@@ -1136,6 +1136,43 @@ app.put('/api/sessions/:id/payments/:playerName', (req, res) => {
   });
 });
 
+// --- Settlement (the bank player's side of the money) ---
+//
+// session_payments tracks losers paying the bank. These two track the other
+// leg: the bank player having paid the winners out. Kept off `status`, which
+// means the game finished, not that the money moved.
+
+// POST /api/sessions/:id/settle  body: { settledBy? }  → close the books
+app.post('/api/sessions/:id/settle', (req, res) => {
+  const sessionId = req.params.id;
+  const settledBy = ((req.body || {}).settledBy || '').trim() || null;
+  const now = new Date().toISOString();
+  db.run(
+    'UPDATE sessions SET settledAt = ?, settledBy = ?, updatedAt = ? WHERE id = ?',
+    [now, settledBy, now, sessionId],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Session not found' });
+      res.json({ ok: true, sessionId, settledAt: now, settledBy });
+    }
+  );
+});
+
+// DELETE /api/sessions/:id/settle  → reopen the books
+app.delete('/api/sessions/:id/settle', (req, res) => {
+  const sessionId = req.params.id;
+  const now = new Date().toISOString();
+  db.run(
+    'UPDATE sessions SET settledAt = NULL, settledBy = NULL, updatedAt = ? WHERE id = ?',
+    [now, sessionId],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Session not found' });
+      res.json({ ok: true, sessionId, settledAt: null });
+    }
+  );
+});
+
 // DELETE /api/sessions/:id/payments/:playerName  → mark unpaid again
 app.delete('/api/sessions/:id/payments/:playerName', (req, res) => {
   const sessionId = req.params.id;

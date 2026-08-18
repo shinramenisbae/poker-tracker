@@ -42,6 +42,9 @@ export function NewSession() {
         bankPlayerId: null,
         gameType: 'in-person',
         discordThreadId: null,
+        // A brand-new session has had no money move through it yet.
+        settledAt: null,
+        settledBy: null,
         players: initialPlayers.map((name) => ({
           id: generateId(),
           name,
