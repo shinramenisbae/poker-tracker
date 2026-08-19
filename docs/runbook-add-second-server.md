@@ -166,6 +166,12 @@ Then add a second line naming which server the rest of `bot/.env` describes:
 DISCORD_GUILD_ID=<GUILD_A>
 ```
 
+⚠️ **Required.** `DISCORD_CHANNEL_ID` and the role IDs in that file are group
+A's. Without this line every guild inherits them, so group B — which hasn't run
+`/setup` yet — watches *group A's channel* and scans it into group B's tracker.
+The bot warns at startup if `GUILD_TRACKERS` names several servers and this is
+unset.
+
 And give **group A's backend** its guild id too — in legacy mode it never needed
 one, but every backend calling a multi-server bot must say which guild it is,
 and the first `/announce` from group A after this cutover otherwise fails with
@@ -176,12 +182,6 @@ $EDITOR /etc/systemd/system/tribe-poker-backend.service   # add under [Service]:
 # Environment=GUILD_ID=<GUILD_A>
 systemctl daemon-reload && systemctl restart tribe-poker-backend.service
 ```
-
-⚠️ **Required.** `DISCORD_CHANNEL_ID` and the role IDs in that file are group
-A's. Without this line every guild inherits them, so group B — which hasn't run
-`/setup` yet — watches *group A's channel* and scans it into group B's tracker.
-The bot warns at startup if `GUILD_TRACKERS` names several servers and this is
-unset.
 
 Validate the JSON before restarting:
 ```bash
