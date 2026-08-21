@@ -1754,6 +1754,11 @@ async function runPaymentReminders({ sessionId = null } = {}) {
   const reminded = [];
   const skipped = [];
   for (const session of sessions) {
+    // Books closed means stop chasing. /finish normally guarantees no unpaid
+    // debtors anyway, but a session settled by the operator (backfilling nights
+    // squared away before /paid tracking existed) still carries unmarked rows —
+    // and must not be pinged about them forever.
+    if (session.settledAt) { skipped.push({ sessionId: session.id, reason: 'settled' }); continue; }
     const threadId = session.discordThreadId
       || ((session.notes || '').match(/threadId=(\d+)/) || [])[1];
     if (!threadId) { skipped.push({ sessionId: session.id, reason: 'no thread' }); continue; }
