@@ -6,6 +6,7 @@ import { Results } from './pages/Results';
 import { Settings } from './pages/Settings';
 import { Stats } from './pages/Stats';
 import { AliasMatcher } from './pages/AliasMatcher';
+import { Debts } from './pages/Debts';
 import { SessionEv } from './pages/SessionEv';
 import { Trainer } from './pages/Trainer';
 import './index.css';
@@ -26,6 +27,7 @@ function App() {
           <Route path="/stats" element={<Stats />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/aliases" element={<AliasMatcher />} />
+          <Route path="/debts" element={<Debts />} />
           <Route path="/session/:id/ev" element={<SessionEv />} />
           <Route path="/trainer" element={<Trainer />} />
           <Route path="*" element={<Navigate to="/" replace />} />

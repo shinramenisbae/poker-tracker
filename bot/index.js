@@ -42,6 +42,7 @@ import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
 import { validateRoleNames, resolveRoleName, assignability, membersNeedingRole } from './roles.js';
 import { canFinish } from './settle.js';
 import { helpText } from './help.js';
+import { aggregateDebts, formatDebtsBoard } from './debts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1015,7 +1016,7 @@ const PAID_COMMAND = new SlashCommandBuilder()
 
 const UNPAID_COMMAND = new SlashCommandBuilder()
   .setName('unpaid')
-  .setDescription('Show who still owes the bank player for this session.');
+  .setDescription('In a session thread: who owes for that session. Anywhere else: everyone\'s debts.');
 
 // Standalone linking — /paid only links as a side effect of marking a debt, so
 // players with nothing to pay (winners, or people who haven't played yet) had
@@ -1253,11 +1254,20 @@ async function handlePaidCommand(interaction) {
 }
 
 async function handleUnpaidCommand(interaction) {
-  // Must be used inside a session results thread.
+  // In a session results thread: that session's unpaid list, as always.
+  // Anywhere else — what used to be a dead-end error — the server-wide board.
   const ch = interaction.channel;
   const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
   if (!isThread || ch.parentId !== settings().channelId) {
-    return interaction.reply({ content: '⚠️ Use `/unpaid` inside a session results thread.', flags: MessageFlags.Ephemeral });
+    await interaction.deferReply();
+    const [sessions, { paymentsBySession }] = await Promise.all([
+      trackerGet('/sessions'),
+      trackerGet('/payments'),
+    ]);
+    return respond(interaction, {
+      content: formatDebtsBoard(aggregateDebts(sessions, paymentsBySession)),
+      allowedMentions: { parse: [] },
+    });
   }
 
   // Fetching the session list alone runs to megabytes; claim the interaction

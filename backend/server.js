@@ -1100,6 +1100,22 @@ app.delete('/api/discord-links/:discordUserId', (req, res) => {
 
 // --- Session payment tracking (/paid) ---
 
+// GET /api/payments — every payment, grouped by session, in one query. The
+// debt board needs payments for ALL sessions; fetching them per session is fine
+// for one thread but not for a browser doing it 200+ times.
+app.get('/api/payments', (req, res) => {
+  db.all('SELECT sessionId, playerName, paidAt, paidBy FROM session_payments', [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const paymentsBySession = {};
+    for (const r of rows) {
+      (paymentsBySession[r.sessionId] = paymentsBySession[r.sessionId] || {})[r.playerName] = {
+        paidAt: r.paidAt, paidBy: r.paidBy,
+      };
+    }
+    res.json({ paymentsBySession });
+  });
+});
+
 // GET /api/sessions/:id/payments → { paid: { "<playerName>": { paidAt, paidBy } } }
 app.get('/api/sessions/:id/payments', (req, res) => {
   db.all(

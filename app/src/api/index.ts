@@ -199,6 +199,17 @@ export interface BankAccountsResponse {
   accounts: Record<string, BankAccount>;
 }
 
+// Every session's payments in one call — the debt board needs all of them, and
+// fetching per session would be hundreds of requests from the browser.
+export interface AllPaymentsResponse {
+  paymentsBySession: Record<string, Record<string, { paidAt: string; paidBy: string | null }>>;
+}
+
+export async function fetchAllPayments(): Promise<AllPaymentsResponse> {
+  const response = await fetch(`${API_BASE_URL}/payments`);
+  return handleResponse<AllPaymentsResponse>(response);
+}
+
 export async function fetchBankAccounts(): Promise<BankAccountsResponse> {
   const response = await fetch(`${API_BASE_URL}/bank-accounts`);
   return handleResponse<BankAccountsResponse>(response);

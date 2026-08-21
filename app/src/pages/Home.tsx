@@ -67,6 +67,15 @@ export function Home() {
                 📊
               </button>
             )}
+            {sessions.length > 0 && (
+              <button
+                onClick={() => navigate('/debts')}
+                className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
+                title="Outstanding debts"
+              >
+                💰
+              </button>
+            )}
             <button
               onClick={() => navigate('/aliases')}
               className="p-2 rounded-full hover:bg-bg-tertiary transition-colors"
