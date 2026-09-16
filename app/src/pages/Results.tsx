@@ -13,7 +13,7 @@ import { announceSessionToDiscord, reannounceSessionToDiscord } from '../api';
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, isLoading, refreshSessions } = useSessions();
+  const { getSession, isLoading, refreshSessions } = useSessions(id);
   const [announceState, setAnnounceState] = useState<
     | { kind: 'idle' }
     | { kind: 'posting' }
