@@ -32,6 +32,9 @@ db.serialize(() => {
       FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
     )
   `);
+  // Loading sessions looks up players per session and buy-ins per player;
+  // without these every lookup scans the whole table.
+  db.run(`CREATE INDEX IF NOT EXISTS idx_players_session ON players(sessionId)`);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS buyIns (
@@ -44,6 +47,8 @@ db.serialize(() => {
       FOREIGN KEY (playerId) REFERENCES players(id) ON DELETE CASCADE
     )
   `);
+  // (playerId, timestamp) also serves the ORDER BY timestamp, so no sort step.
+  db.run(`CREATE INDEX IF NOT EXISTS idx_buyins_player ON buyIns(playerId, timestamp)`);
 
   // alias_mappings: crowd-sourced mapping of online ledger aliases to canonical player names
   // (used by the Discord backfill flow — friends help match unknown aliases via the /aliases UI)

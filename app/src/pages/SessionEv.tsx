@@ -8,7 +8,7 @@ import { SessionPlayerStyleChartCard } from '../components/PlayerStyleChartCard'
 export function SessionEv() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession } = useSessions();
+  const { getSession } = useSessions(id);
   const session = id ? getSession(id) : null;
 
   const [data, setData] = useState<EvSeriesResponse | null>(null);

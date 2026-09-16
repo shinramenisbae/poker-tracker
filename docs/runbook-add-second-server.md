@@ -129,6 +129,12 @@ nginx server block:
 server {
     server_name <HOST_B>;
     client_max_body_size 20m;          # hand logs; without this uploads 413
+    # nginx.conf gzips only HTML; the session list JSON and the JS bundle are
+    # the big transfers (~86% smaller compressed)
+    gzip_types application/json application/javascript text/javascript text/css image/svg+xml;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_comp_level 6;
     root /var/www/poker-tracker-b;
     index index.html;
     location /api/ { proxy_pass http://127.0.0.1:5002; }

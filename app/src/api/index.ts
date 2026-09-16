@@ -17,6 +17,11 @@ export async function fetchSessions(): Promise<Session[]> {
   return handleResponse<Session[]>(response);
 }
 
+export async function fetchSession(id: string): Promise<Session> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${id}`);
+  return handleResponse<Session>(response);
+}
+
 export async function createSession(data: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/sessions`, {
     method: 'POST',

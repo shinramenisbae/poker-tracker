@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import type { Session, AppSettings } from '../types';
 import {
   fetchSessions as apiFetchSessions,
+  fetchSession as apiFetchSession,
   createSession as apiCreateSession,
   updateSession as apiUpdateSession,
   deleteSession as apiDeleteSession,
@@ -47,8 +48,10 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
   return [storedValue, setValue];
 }
 
-// Hook for managing sessions via API
-export function useSessions() {
+// Hook for managing sessions via API. Pass a session id on pages that show one
+// session: it loads just that session instead of every session ever played
+// (the full list is the slowest request the app makes).
+export function useSessions(sessionId?: string) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +65,7 @@ export function useSessions() {
       setIsLoading(true);
       setError(null);
       try {
-        const data = await apiFetchSessions();
+        const data = sessionId ? [await apiFetchSession(sessionId)] : await apiFetchSessions();
         // Ensure each session has a players array
         const normalized = data.map((s) => ({
           ...s,
@@ -80,14 +83,14 @@ export function useSessions() {
     };
 
     loadSessions();
-  }, []);
+  }, [sessionId]);
 
   // Refresh sessions manually
   const refreshSessions = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await apiFetchSessions();
+      const data = sessionId ? [await apiFetchSession(sessionId)] : await apiFetchSessions();
       const normalized = data.map((s) => ({
         ...s,
         players: Array.isArray(s.players) ? s.players : [],
@@ -100,7 +103,7 @@ export function useSessions() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [sessionId]);
 
   const addSession = useCallback(async (session: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>) => {
     setIsLoading(true);

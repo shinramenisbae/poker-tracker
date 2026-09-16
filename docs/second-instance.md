@@ -60,6 +60,11 @@ separate build — just its own server block:
 server {
     server_name poker-b.example.com;
     client_max_body_size 20m;              # hand logs
+    # nginx.conf gzips only HTML; compress the session JSON and JS bundle too
+    gzip_types application/json application/javascript text/javascript text/css image/svg+xml;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_comp_level 6;
     root /var/www/poker-tracker-b;         # its own copy of the built frontend
     location /api/ { proxy_pass http://127.0.0.1:5002; }
 }
