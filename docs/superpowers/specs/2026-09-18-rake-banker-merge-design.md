@@ -9,7 +9,9 @@ share one design, and ship as three PRs in the order below.
 ## Problem
 
 1. **Rake** is recorded by inventing a player called `Rake` and cashing it out
-   with the night's rake: 21 Group A sessions, $2,405.50 since 15 March 2026.
+   with the night's rake: 22 Group A rows, $2,535.50 since 15 March 2026 —
+   20 spelled `Rake`/`rake`, plus `rale` ($130 on 6 September) and an empty
+   `stephen rake?` row.
    Because it looks like a player it appears as a winner in results and in the
    player stats, and the settlement has the bank paying "Rake". Nothing tracks
    who is physically holding the money, what has been spent, or the running
@@ -68,7 +70,7 @@ Opening balances, effective after the 16 September 2026 session:
 | **Total** | **$791.81** |
 
 All three are existing canonical players. The figure is lower than the
-$2,405.50 the tracker has recorded because rake has been spent over time; the
+$2,535.50 the tracker has recorded because rake has been spent over time; the
 user's number is authoritative and the converted history contributes nothing to
 it (see *Historical conversion*).
 
@@ -268,18 +270,24 @@ post.
 ## Historical conversion
 
 `scripts/convert-rake-players.js`, dry-run by default, `--apply` with a backup:
-each `Rake` player becomes its session's `rakeAmount` (cash-out − buy-ins, which
+each rake row becomes its session's `rakeAmount` (cash-out − buy-ins, which
 gives $40 for the 27 May session where Rake had a $40 buy-in and an $80
-cash-out) and the row is deleted. `rakeHolder` is left NULL.
+cash-out) and the row is deleted. `rakeHolder` is left NULL. A $0 row — the one
+`stephen rake?` — is deleted without setting any rake.
+
+Rows are matched against an explicit list of names, trimmed and lower-cased:
+`rake`, `rale`, `stephen rake?`. A list, not a pattern, so a future player
+called something like "Drake" can never be swallowed. 22 rows in Group A, none
+in Group B.
 
 These sessions get **no ledger entries** — that money is already inside the
 opening balances. Visible effects: `Rake` stops appearing as a winner on old
 results and leaves the player stats, where it currently sits near the top.
 
-The canonical player list also carries `Rake` (and the junk `rale`,
-`stephen rake?`) in the aliases UI. Retiring `Rake` through the existing
-`removed_canonicals` mechanism is part of this; the other two are flagged for
-the user rather than guessed at.
+The aliases UI builds its canonical list from the seed file, alias targets and
+distinct session-player names. None of these three is in the seed file and none
+is an alias target, so deleting the rows is what removes the names — no
+`removed_canonicals` entry is needed.
 
 The opening balances go in as three `adjust` entries dated at the cut-off, noted
 "opening balance".
