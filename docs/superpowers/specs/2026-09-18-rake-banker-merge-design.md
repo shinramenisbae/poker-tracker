@@ -64,10 +64,14 @@ Opening balances, effective after the 16 September 2026 session:
 
 | Holder | Balance |
 |---|---|
-| Amoon | $90.31 |
 | Stephen | $372.50 |
 | Jordan | $329.00 |
-| **Total** | **$791.81** |
+| Jeremy | $40.00 |
+| **Total** | **$741.50** |
+
+Amoon handed her rake to Jeremy, who has since spent part of it on communal
+snacks and drinks, so only what Jeremy holds today is carried in: $40. The
+opening entries record balances as they stand, not the history behind them.
 
 All three are existing canonical players. The figure is lower than the
 $2,535.50 the tracker has recorded because rake has been spent over time; the
@@ -303,10 +307,10 @@ Per-session post, sent when a session ends with rake:
 ```
 🧾 Wednesday sesh — 23 Sep
 Rake $133 → held by Daniel H
-Pile: $924.81 · Stephen $372.50 · Jordan $329.00 · Daniel H $133.00 · Amoon $90.31
+Pile: $874.50 · Stephen $372.50 · Jordan $329.00 · Daniel H $133.00 · Jeremy $40.00
 ```
 
-(The first session after the cut-off, on top of the $791.81 opening balances.)
+(The first session after the cut-off, on top of the $741.50 opening balances.)
 
 Its message id is stored on the ledger entry. A later correction edits that post
 and adds a line — "✏️ Rake for Wednesday sesh corrected: $133 → $143. Pile now
