@@ -409,10 +409,15 @@ app.post('/api/sessions/:id/end', async (req, res) => {
   const { rakeAmount, rakeHolder } = req.body || {};
   try {
     const { merges, rake } = await endSession(db, sessionId, { rakeAmount, rakeHolder });
+    // Tell the rake channel, if there is one. Best-effort: the ledger is the
+    // record, and a Discord problem must not cost someone their session ending.
+    const discord = rake.amount > 0
+      ? await callBot(`/session-rake/${encodeURIComponent(sessionId)}`, {})
+      : { ok: true, skipped: 'no rake' };
     readSession(sessionId, (err, session) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!session) return res.status(404).json({ error: 'Session not found' });
-      res.json({ ...session, merges, rake });
+      res.json({ ...session, merges, rake: { ...rake, discord } });
     });
   } catch (err) {
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
@@ -1062,12 +1067,19 @@ app.put('/api/sessions/:id/rake', (req, res) => {
         db.get('SELECT * FROM rake_entries WHERE sessionId = ? AND kind = \'session\'', [sessionId], (err, existing) => {
           if (err) return res.status(500).json({ error: err.message });
 
+          const previousAmount = session.rakeAmount ?? 0;
           const done = () => readRakeEntries((err, entries) => {
             if (err) return res.status(500).json({ error: err.message });
             const { total, holders } = balancesFrom(entries);
-            readSession(sessionId, (err, updated) => {
+            readSession(sessionId, async (err, updated) => {
               if (err) return res.status(500).json({ error: err.message });
-              res.json({ ...updated, rake: { total, holders, entryId: existing ? existing.id : null } });
+              // A correction is posted as a correction, so the channel shows
+              // what changed rather than a number that quietly differs from
+              // the one people read last week.
+              const discord = previousAmount !== amount || amount > 0
+                ? await callBot(`/session-rake/${encodeURIComponent(sessionId)}`, { previousAmount })
+                : { ok: true, skipped: 'nothing to say' };
+              res.json({ ...updated, rake: { total, holders, entryId: existing ? existing.id : null, discord } });
             });
           });
 
@@ -1208,7 +1220,7 @@ app.delete('/api/bank-accounts/:name', (req, res) => {
 
 const BOT_SETTING_FIELDS = [
   'guildId', 'guildName', 'channelId', 'pokerRoleId', 'coldRoleId',
-  'hotRoleId', 'reminderHour', 'reminderTz', 'chipDivisor',
+  'hotRoleId', 'reminderHour', 'reminderTz', 'chipDivisor', 'rakeChannelId',
 ];
 
 // GET /api/bot-settings → { settings: {...} | null }

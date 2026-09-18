@@ -106,3 +106,12 @@ test('envDefaultsFor: fails closed when no guild claims the env block', () => {
   const env = envDefaultsFor({ legacy: false, envGuildId: '', guildId: 'guild-a' }, ENV);
   assert.deepEqual(env, {});
 });
+
+test('resolveSettings: the rake channel comes from /setup, or the env, or nowhere', () => {
+  // A group that has never run "/setup rake_channel" records rake and posts
+  // nothing, rather than posting into whatever channel it can find.
+  assert.equal(resolveSettings({ rakeChannelId: '999' }, ENV).rakeChannelId, '999');
+  assert.equal(resolveSettings(null, { ...ENV, DISCORD_RAKE_CHANNEL_ID: '777' }).rakeChannelId, '777');
+  assert.equal(resolveSettings(null, ENV).rakeChannelId, '');
+  assert.equal(resolveSettings({ rakeChannelId: '999' }, ENV).source.rakeChannelId, 'setup');
+});

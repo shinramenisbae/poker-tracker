@@ -257,6 +257,12 @@ db.serialize(() => {
       updatedAt    TEXT NOT NULL
     )
   `);
+
+  // Migration: where the bot posts the rake pile. Unset means it records rake
+  // but posts nothing, which is how a second group starts out.
+  db.run(`ALTER TABLE bot_settings ADD COLUMN rakeChannelId TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
 });
 
 module.exports = db;
