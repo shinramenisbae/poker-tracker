@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const db = require('./database');
+const { endSession } = require('./end-session');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
@@ -188,34 +189,28 @@ app.get('/api/sessions', (req, res) => {
   });
 });
 
-// GET /api/sessions/:id - Get session with players
-app.get('/api/sessions/:id', (req, res) => {
-  const sessionId = req.params.id;
-  
+// Assembles one session with its players and their buy-ins.
+// Shared by GET /api/sessions/:id and POST /api/sessions/:id/end.
+function readSession(sessionId, callback) {
   db.get('SELECT * FROM sessions WHERE id = ?', [sessionId], (err, session) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
+    if (err) return callback(err);
+    if (!session) return callback(null, null);
 
     db.all('SELECT * FROM players WHERE sessionId = ?', [sessionId], (err, players) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
+      if (err) return callback(err);
+      if (!players || players.length === 0) return callback(null, { ...session, players: [] });
 
-      if (players.length === 0) {
-        return res.json({ ...session, players: [] });
-      }
-
+      // One failed buy-in query used to send its own 500 — once per player row.
+      let failed = false;
       let completedPlayers = 0;
-      const playersWithBuyIns = [];
+      const playersWithBuyIns = new Array(players.length);
 
       players.forEach((player, index) => {
         db.all('SELECT * FROM buyIns WHERE playerId = ? ORDER BY timestamp', [player.id], (err, buyIns) => {
+          if (failed) return;
           if (err) {
-            return res.status(500).json({ error: err.message });
+            failed = true;
+            return callback(err);
           }
           playersWithBuyIns[index] = {
             ...player,
@@ -227,11 +222,20 @@ app.get('/api/sessions/:id', (req, res) => {
           completedPlayers++;
 
           if (completedPlayers === players.length) {
-            res.json({ ...session, players: playersWithBuyIns });
+            callback(null, { ...session, players: playersWithBuyIns });
           }
         });
       });
     });
+  });
+}
+
+// GET /api/sessions/:id - Get session with players
+app.get('/api/sessions/:id', (req, res) => {
+  readSession(req.params.id, (err, session) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    res.json(session);
   });
 });
 
@@ -389,6 +393,28 @@ app.put('/api/sessions/:id', (req, res) => {
     );
     stmt.finalize();
   });
+});
+
+// POST /api/sessions/:id/end — finish a session.
+//
+// Replaces the browser PUTting {status, bankPlayerId}: merging duplicate
+// entries of one player and naming the banker have to happen together, in that
+// order, and atomically. Returns the finished session plus what was merged, so
+// the results page can say what happened to Leo's two rows.
+app.post('/api/sessions/:id/end', async (req, res) => {
+  const sessionId = req.params.id;
+  try {
+    const { merges } = await endSession(db, sessionId);
+    readSession(sessionId, (err, session) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!session) return res.status(404).json({ error: 'Session not found' });
+      res.json({ ...session, merges });
+    });
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.code === 'ALREADY_COMPLETED') return res.status(409).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // DELETE /api/sessions/:id - Delete session

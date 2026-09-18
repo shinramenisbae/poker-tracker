@@ -22,6 +22,25 @@ export async function fetchSession(id: string): Promise<Session> {
   return handleResponse<Session>(response);
 }
 
+export interface SessionMerge {
+  name: string;
+  keepId: string;
+  entries: number;
+  totalBuyIn: number;
+  totalCashOut: number;
+}
+export type EndSessionResult = Session & { merges: SessionMerge[] };
+
+// Ends a session: the server merges duplicate entries of one player and picks
+// the banker from the merged results, which is why this isn't a plain update.
+export async function endSession(id: string): Promise<EndSessionResult> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${id}/end`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return handleResponse<EndSessionResult>(response);
+}
+
 export async function createSession(data: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/sessions`, {
     method: 'POST',

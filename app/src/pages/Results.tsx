@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { SettlementView } from '../components/SettlementView';
 import {
@@ -8,7 +8,7 @@ import {
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
-import { announceSessionToDiscord, reannounceSessionToDiscord } from '../api';
+import { announceSessionToDiscord, reannounceSessionToDiscord, type SessionMerge } from '../api';
 
 export function Results() {
   const { id } = useParams<{ id: string }>();
@@ -23,6 +23,10 @@ export function Results() {
   >({ kind: 'idle' });
 
   const session = getSession(id || '');
+
+  // Handed over by End Session, not stored: it describes what just happened,
+  // so it belongs in the navigation and is gone on reload.
+  const merges = (useLocation().state as { merges?: SessionMerge[] } | null)?.merges ?? [];
 
   // Detect prior announcement so the button reflects state.
   // Prefer the dedicated column; fall back to the legacy notes marker for
@@ -113,6 +117,19 @@ export function Results() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-6 pb-32">
+        {/* What ending the session merged — a player who cashed out and came
+            back was added as a second row, and is now one player again. */}
+        {merges.length > 0 && (
+          <div className="card mb-4 border-accent-primary">
+            {merges.map((merge) => (
+              <p key={merge.keepId} className="text-sm text-text-secondary">
+                🔗 Merged {merge.name}&apos;s {merge.entries} entries — {formatCurrency(merge.totalBuyIn)} in,{' '}
+                {formatCurrency(merge.totalCashOut)} out
+              </p>
+            ))}
+          </div>
+        )}
+
         {/* Session Summary */}
         <div className="card mb-6">
           <h2 className="text-lg font-semibold text-text-primary mb-4">Session Summary</h2>

@@ -3,6 +3,7 @@ import type { Session, AppSettings } from '../types';
 import {
   fetchSessions as apiFetchSessions,
   fetchSession as apiFetchSession,
+  endSession as apiEndSession,
   createSession as apiCreateSession,
   updateSession as apiUpdateSession,
   deleteSession as apiDeleteSession,
@@ -137,6 +138,25 @@ export function useSessions(sessionId?: string) {
       const message = err instanceof Error ? err.message : 'Failed to update session';
       setError(message);
       console.error('Error updating session:', err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Ending a session is the server's job: it merges a player who cashed out and
+  // rejoined, then picks the banker from the merged results.
+  const endSession = useCallback(async (id: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const finished = await apiEndSession(id);
+      setSessions((prev) => prev.map((session) => (session.id === id ? finished : session)));
+      return finished;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to end session';
+      setError(message);
+      console.error('Error ending session:', err);
       throw err;
     } finally {
       setIsLoading(false);
@@ -296,6 +316,7 @@ export function useSessions(sessionId?: string) {
     refreshSessions,
     addSession,
     updateSession,
+    endSession,
     deleteSession,
     getSession,
     addPlayerToSession,

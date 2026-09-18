@@ -8,7 +8,6 @@ import { BuyInsModal } from '../components/BuyInsModal';
 import {
   getTotalBuyIn,
   getSessionTotals,
-  identifyBankPlayer,
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
@@ -16,7 +15,7 @@ import {
 export function SessionDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, updateSession, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
+  const { getSession, endSession, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
 
   const session = getSession(id || '');
 
@@ -219,12 +218,10 @@ export function SessionDetail() {
     setActionError(null);
 
     try {
-      const bankId = identifyBankPlayer(session);
-      await updateSession(session.id, {
-        status: 'completed',
-        bankPlayerId: bankId,
-      });
-      navigate(`/session/${session.id}/results`);
+      // The server merges any duplicate entries — a player who cashed out and
+      // rejoined is one person — and picks the banker from the merged results.
+      const { merges } = await endSession(session.id);
+      navigate(`/session/${session.id}/results`, { state: { merges } });
     } catch {
       setActionError('Failed to end session. Please try again.');
     } finally {
