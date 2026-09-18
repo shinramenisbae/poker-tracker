@@ -20,10 +20,15 @@ export function getSessionTotals(session: Session): SessionTotals {
     (sum, p) => sum + (p.cashOut?.amount ?? 0),
     0
   );
+  // Rake left the table before anyone was paid, so the pot balances as
+  // buy-ins = cash-outs + rake. Compared with a tolerance because money is
+  // stored as a float.
+  const rake = session.rakeAmount ?? 0;
   return {
     totalPot,
     totalCashOut,
-    isBalanced: totalPot === totalCashOut,
+    rake,
+    isBalanced: Math.abs(totalPot - (totalCashOut + rake)) < 0.005,
   };
 }
 
@@ -127,14 +132,25 @@ export function getSettlementSummary(session: Session): SettlementSummary | null
   const settlements = calculateSettlements(session);
   const nonBankSettlements = settlements.filter((s) => s.playerId !== bankId);
 
+  // Rake is money the bank owes whoever is holding it — a transfer like a
+  // winner's payout, so the cash on the table still goes to the players. With
+  // no holder named the bank is holding it, and nothing moves.
+  const rakeAmount = session.rakeAmount ?? 0;
+  const rakeHolderName = session.rakeHolder || bankPlayer.name;
+  const rake = rakeAmount > 0
+    ? { amount: rakeAmount, holderName: rakeHolderName, holderIsBank: rakeHolderName === bankPlayer.name }
+    : null;
+
   return {
     bankPlayerId: bankId,
     bankPlayerName: bankPlayer.name,
     settlements,
     cashToCollect: settlements.reduce((sum, s) => sum + s.cashBuyIn, 0),
     cashToDistribute: nonBankSettlements.reduce((sum, s) => sum + s.cashReceived, 0),
-    bankTransfersOut: nonBankSettlements.reduce((sum, s) => sum + s.bankReceived, 0),
+    bankTransfersOut: nonBankSettlements.reduce((sum, s) => sum + s.bankReceived, 0)
+      + (rake && !rake.holderIsBank ? rake.amount : 0),
     bankTransfersIn: nonBankSettlements.reduce((sum, s) => sum + s.bankOwed, 0),
+    rake,
   };
 }
 

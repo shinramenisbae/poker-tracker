@@ -45,6 +45,9 @@ export function NewSession() {
         // A brand-new session has had no money move through it yet.
         settledAt: null,
         settledBy: null,
+        // Rake is entered when the session ends, not when it starts.
+        rakeAmount: 0,
+        rakeHolder: null,
         players: initialPlayers.map((name) => ({
           id: generateId(),
           name,

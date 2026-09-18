@@ -32,6 +32,11 @@ export function SessionDetail() {
   const [rebuyType, setRebuyType] = useState<'top-up' | 'stacked'>('top-up');
   const [stackedHand, setStackedHand] = useState('');
   const [editBuyInsPlayer, setEditBuyInsPlayer] = useState<Player | null>(null);
+  // Ending a session asks for the night's rake, because it is the one number
+  // nobody can reconstruct afterwards from what the tracker holds.
+  const [showEndSession, setShowEndSession] = useState(false);
+  const [rakeAmount, setRakeAmount] = useState('');
+  const [rakeHolder, setRakeHolder] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -219,9 +224,14 @@ export function SessionDetail() {
 
     try {
       // The server merges any duplicate entries — a player who cashed out and
-      // rejoined is one person — and picks the banker from the merged results.
-      const { merges } = await endSession(session.id);
-      navigate(`/session/${session.id}/results`, { state: { merges } });
+      // rejoined is one person — picks the banker from the merged results, and
+      // records the rake.
+      const { merges, rake } = await endSession(session.id, {
+        amount: Number(rakeAmount) || 0,
+        holder: rakeHolder.trim() || null,
+      });
+      setShowEndSession(false);
+      navigate(`/session/${session.id}/results`, { state: { merges, rake } });
     } catch {
       setActionError('Failed to end session. Please try again.');
     } finally {
@@ -354,7 +364,7 @@ export function SessionDetail() {
             View Results
           </button>
           <button
-            onClick={handleEndSession}
+            onClick={() => { setRakeAmount(''); setRakeHolder(''); setActionError(null); setShowEndSession(true); }}
             disabled={!allCashedOut || session.status === 'completed' || actionLoading}
             className="flex-1 btn-primary disabled:opacity-50"
           >
@@ -366,6 +376,75 @@ export function SessionDetail() {
           </button>
         </div>
       </footer>
+
+      {/* End Session: the rake is asked for here because it is the one number
+          that cannot be worked out afterwards from anything else stored. */}
+      {showEndSession && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <div className="bg-surface-primary w-full max-w-md sm:rounded-2xl rounded-t-2xl p-6">
+            <h2 className="text-xl font-semibold text-text-primary mb-2">End the session</h2>
+            <p className="text-text-secondary text-sm mb-4">
+              Anything taken for the rake, and who is holding it. Leave it at $0 if none was taken.
+            </p>
+
+            <div className="mb-4">
+              <label htmlFor="end-rake-amount" className="block text-sm font-medium text-text-secondary mb-2">
+                Rake
+              </label>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-tertiary text-lg">$</span>
+                <input
+                  id="end-rake-amount"
+                  type="number"
+                  value={rakeAmount}
+                  onChange={(e) => setRakeAmount(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full h-16 pl-10 pr-4 text-2xl font-semibold bg-bg-tertiary rounded-xl border border-transparent focus:border-accent-primary focus:outline-none tabular-nums"
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <label htmlFor="end-rake-holder" className="block text-sm font-medium text-text-secondary mb-2">
+                Held by
+              </label>
+              <input
+                id="end-rake-holder"
+                type="text"
+                value={rakeHolder}
+                onChange={(e) => setRakeHolder(e.target.value)}
+                placeholder="Whoever banks tonight"
+                className="input w-full"
+                list="end-rake-holder-options"
+              />
+              <datalist id="end-rake-holder-options">
+                {session.players.map((p) => <option key={p.id} value={p.name} />)}
+              </datalist>
+              <p className="text-xs text-text-tertiary mt-1">
+                Leave empty and it follows the bank player.
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowEndSession(false)}
+                disabled={actionLoading}
+                className="flex-1 btn-secondary disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleEndSession}
+                disabled={actionLoading}
+                className="flex-1 btn-primary disabled:opacity-50"
+              >
+                {actionLoading ? 'Ending…' : 'End session'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Player Modal */}
       {showAddPlayer && (

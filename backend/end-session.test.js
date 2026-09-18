@@ -107,6 +107,91 @@ test('endSession: an unknown session is refused', async () => {
   await assert.rejects(() => endSession(db, 'nope'), (err) => err.code === 'NOT_FOUND');
 });
 
+const rakeEntriesFor = (sessionId) =>
+  allAsync(db, 'SELECT kind, amount, fromName, toName, note FROM rake_entries WHERE sessionId = ?', [sessionId]);
+
+test('endSession: rake is stored and credited to the holder', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Simon', buyIns: [2000], cashOut: 1180 },
+  ]);
+
+  await endSession(db, sessionId, { rakeAmount: 133, rakeHolder: 'Stephen' });
+
+  const session = await getAsync(db, 'SELECT rakeAmount, rakeHolder FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 133);
+  assert.equal(session.rakeHolder, 'Stephen');
+  assert.deepEqual(await rakeEntriesFor(sessionId), [
+    { kind: 'session', amount: 133, fromName: null, toName: 'Stephen', note: null },
+  ]);
+});
+
+test('endSession: with no holder named, the banker holds the rake', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Simon', buyIns: [2000], cashOut: 1180 },
+  ]);
+
+  await endSession(db, sessionId, { rakeAmount: 50 });
+
+  const session = await getAsync(db, 'SELECT rakeAmount, rakeHolder FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeHolder, null, 'left empty so it follows a banker change');
+  const [entry] = await rakeEntriesFor(sessionId);
+  assert.equal(entry.toName, 'Daniel H', 'the ledger records who actually holds it');
+});
+
+test('endSession: a night with no rake writes nothing to the ledger', async () => {
+  const sessionId = await seedSession([{ name: 'Simon', buyIns: [100], cashOut: 150 }]);
+
+  await endSession(db, sessionId, { rakeAmount: 0 });
+
+  assert.deepEqual(await rakeEntriesFor(sessionId), []);
+  const session = await getAsync(db, 'SELECT rakeAmount FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 0);
+});
+
+test('endSession: a leftover Rake player becomes the session s rake', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Rake', buyIns: [], cashOut: 133 },
+  ]);
+
+  const result = await endSession(db, sessionId, {});
+
+  const players = await playersOf(sessionId);
+  assert.deepEqual(players.map((p) => p.name), ['Daniel H'], 'the fake player is gone');
+  const session = await getAsync(db, 'SELECT rakeAmount FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 133);
+  assert.equal(result.rake.amount, 133);
+  assert.equal(result.rake.convertedFromPlayer, true);
+});
+
+test('endSession: a typed amount wins over a leftover Rake player', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Rake', buyIns: [], cashOut: 133 },
+  ]);
+
+  const result = await endSession(db, sessionId, { rakeAmount: 140 });
+
+  const session = await getAsync(db, 'SELECT rakeAmount FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 140, 'not 273 — the two are the same money');
+  assert.equal(result.rake.discardedPlayerAmount, 133);
+  assert.equal((await playersOf(sessionId)).length, 1);
+});
+
+test('endSession: the Rake player never banks', async () => {
+  // It used to be possible: the pile "won" every session it appeared in.
+  const sessionId = await seedSession([
+    { name: 'Simon', buyIns: [100], cashOut: 50 },
+    { name: 'Rake', buyIns: [], cashOut: 60 },
+  ]);
+
+  const result = await endSession(db, sessionId, {});
+
+  assert.equal(result.bankPlayerId, null, 'nobody won, so nobody banks');
+});
+
 test('endSession: buy-ins keep their own timestamps after moving', async () => {
   const sessionId = await seedSession([
     { name: 'Min', buyIns: [100], cashOut: 0 },

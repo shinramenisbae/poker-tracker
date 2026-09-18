@@ -29,14 +29,22 @@ export interface SessionMerge {
   totalBuyIn: number;
   totalCashOut: number;
 }
-export type EndSessionResult = Session & { merges: SessionMerge[] };
+export interface SessionRakeResult {
+  amount: number;
+  holder: string | null;
+  convertedFromPlayer: boolean;
+  discardedPlayerAmount: number | null;
+}
+export type EndSessionResult = Session & { merges: SessionMerge[]; rake: SessionRakeResult };
 
-// Ends a session: the server merges duplicate entries of one player and picks
-// the banker from the merged results, which is why this isn't a plain update.
-export async function endSession(id: string): Promise<EndSessionResult> {
+// Ends a session: the server merges duplicate entries of one player, picks the
+// banker from the merged results, and records the night's rake — which is why
+// this isn't a plain update.
+export async function endSession(id: string, rake: { amount: number; holder: string | null } = { amount: 0, holder: null }): Promise<EndSessionResult> {
   const response = await fetch(`${API_BASE_URL}/sessions/${id}/end`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rakeAmount: rake.amount, rakeHolder: rake.holder }),
   });
   return handleResponse<EndSessionResult>(response);
 }
@@ -56,6 +64,30 @@ export async function changeBanker(sessionId: string, playerId: string): Promise
     body: JSON.stringify({ playerId }),
   });
   return handleResponse<Session & { discord?: DiscordOutcome }>(response);
+}
+
+export interface RakeHolder {
+  name: string;
+  balance: number;
+}
+export interface RakeBalances {
+  total: number;
+  holders: RakeHolder[];
+}
+// Corrects a night's rake, or moves who is holding it. Never locked: a typo
+// should not be permanent.
+export async function setSessionRake(sessionId: string, amount: number, holder: string | null): Promise<Session & { rake: RakeBalances }> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/rake`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount, holder }),
+  });
+  return handleResponse<Session & { rake: RakeBalances }>(response);
+}
+
+export async function fetchRake(): Promise<RakeBalances & { entries: unknown[] }> {
+  const response = await fetch(`${API_BASE_URL}/rake`);
+  return handleResponse<RakeBalances & { entries: unknown[] }>(response);
 }
 
 export interface SessionPaymentsResponse {

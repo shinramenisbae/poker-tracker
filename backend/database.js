@@ -200,6 +200,43 @@ db.serialize(() => {
     // Ignore error if column already exists
   });
 
+  // rake_entries: every movement of the rake pile — a session's rake, money
+  // spent out of it, rake handed to someone else, an admin correction. Balances
+  // are the sum of these rows and are never stored, so a wrong entry can be
+  // found and reversed instead of having silently overwritten a total.
+  //
+  // Direction comes from the columns: toName is credited, fromName is debited.
+  // A 'give' fills both and nets to zero across the pile.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS rake_entries (
+      id               TEXT PRIMARY KEY,
+      kind             TEXT NOT NULL,     -- 'session' | 'spend' | 'give' | 'adjust'
+      amount           REAL NOT NULL,     -- always positive
+      fromName         TEXT,
+      toName           TEXT,
+      sessionId        TEXT,
+      note             TEXT,
+      createdAt        TEXT NOT NULL,
+      createdBy        TEXT,
+      discordMessageId TEXT,
+      FOREIGN KEY (sessionId) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+  // One rake row per session: correcting a typo edits that row rather than
+  // crediting the holder twice.
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_rake_session ON rake_entries(sessionId) WHERE kind = 'session'`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_rake_created ON rake_entries(createdAt)`);
+
+  // Migration: rake as money rather than a player called "Rake". rakeHolder is
+  // a player NAME, not an id — whoever holds the cash need not have played that
+  // night. NULL means the bank player, so the holder follows a banker change.
+  db.run(`ALTER TABLE sessions ADD COLUMN rakeAmount REAL NOT NULL DEFAULT 0`, (err) => {
+    // Ignore error if column already exists
+  });
+  db.run(`ALTER TABLE sessions ADD COLUMN rakeHolder TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
+
   // bot_settings: Discord wiring the server owner sets with /setup, instead of
   // someone SSHing in to edit the bot's .env. Single row (one instance watches
   // one server); guildId records where /setup was run. Anything null here falls

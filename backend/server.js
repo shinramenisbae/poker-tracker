@@ -6,6 +6,7 @@ const db = require('./database');
 const { endSession } = require('./end-session');
 const { canChangeBanker } = require('./change-banker');
 const { pickBankPlayer } = require('./bank-player');
+const { balancesFrom, checkEntry, cents } = require('./rake-ledger');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
@@ -405,12 +406,13 @@ app.put('/api/sessions/:id', (req, res) => {
 // the results page can say what happened to Leo's two rows.
 app.post('/api/sessions/:id/end', async (req, res) => {
   const sessionId = req.params.id;
+  const { rakeAmount, rakeHolder } = req.body || {};
   try {
-    const { merges } = await endSession(db, sessionId);
+    const { merges, rake } = await endSession(db, sessionId, { rakeAmount, rakeHolder });
     readSession(sessionId, (err, session) => {
       if (err) return res.status(500).json({ error: err.message });
       if (!session) return res.status(404).json({ error: 'Session not found' });
-      res.json({ ...session, merges });
+      res.json({ ...session, merges, rake });
     });
   } catch (err) {
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
@@ -978,6 +980,117 @@ app.delete('/api/import/spreadsheet', (req, res) => {
       return res.status(500).json({ error: err.message });
     }
     res.json({ deleted: this.changes, message: `Removed ${this.changes} imported sessions` });
+  });
+});
+
+// --- Rake: the pile, and every movement of it ---
+//
+// Balances are never stored. They are the sum of rake_entries, so a wrong entry
+// can be found and reversed rather than having overwritten a total.
+
+function readRakeEntries(callback) {
+  db.all('SELECT * FROM rake_entries ORDER BY createdAt', [], callback);
+}
+
+// GET /api/rake → the pile, who holds what, and the recent movements.
+app.get('/api/rake', (req, res) => {
+  readRakeEntries((err, entries) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const { total, holders } = balancesFrom(entries);
+    res.json({ total, holders, entries: entries.slice(-100).reverse() });
+  });
+});
+
+// POST /api/rake/entries — spend it, hand it over, or correct it.
+// The bot's /rake commands come through here, so the rules live in one place.
+app.post('/api/rake/entries', (req, res) => {
+  const { kind, amount, fromName, toName, note, createdBy, sessionId } = req.body || {};
+  const entry = {
+    kind,
+    amount: cents(Number(amount)),
+    fromName: (fromName || '').trim() || null,
+    toName: (toName || '').trim() || null,
+  };
+
+  readRakeEntries((err, entries) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    const balances = balancesFrom(entries);
+    const verdict = checkEntry(entry, balances);
+    if (!verdict.ok) return res.status(409).json({ error: verdict.reason });
+
+    const id = generateId();
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO rake_entries (id, kind, amount, fromName, toName, sessionId, note, createdAt, createdBy)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, entry.kind, entry.amount, entry.fromName, entry.toName, sessionId || null,
+        (note || '').trim() || null, now, (createdBy || '').trim() || null],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+        const after = balancesFrom([...entries, entry]);
+        res.json({
+          entry: { id, ...entry, sessionId: sessionId || null, note: note || null, createdAt: now, createdBy: createdBy || null },
+          total: after.total,
+          holders: after.holders,
+        });
+      }
+    );
+  });
+});
+
+// PUT /api/sessions/:id/rake — correct a night's rake or move who holds it.
+// Deliberately never locked: a typo should not be permanent.
+app.put('/api/sessions/:id/rake', (req, res) => {
+  const sessionId = req.params.id;
+  const amount = cents(Number((req.body || {}).amount) || 0);
+  const holder = (((req.body || {}).holder) || '').trim() || null;
+  if (!(amount >= 0)) return res.status(400).json({ error: 'amount must be $0 or more' });
+
+  readSession(sessionId, (err, session) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    const bankPlayer = (session.players || []).find((p) => p.id === session.bankPlayerId);
+    const creditedTo = holder || (bankPlayer ? bankPlayer.name : null);
+    const now = new Date().toISOString();
+
+    db.run('UPDATE sessions SET rakeAmount = ?, rakeHolder = ?, updatedAt = ? WHERE id = ?',
+      [amount, holder, now, sessionId], function (err) {
+        if (err) return res.status(500).json({ error: err.message });
+
+        db.get('SELECT * FROM rake_entries WHERE sessionId = ? AND kind = \'session\'', [sessionId], (err, existing) => {
+          if (err) return res.status(500).json({ error: err.message });
+
+          const done = () => readRakeEntries((err, entries) => {
+            if (err) return res.status(500).json({ error: err.message });
+            const { total, holders } = balancesFrom(entries);
+            readSession(sessionId, (err, updated) => {
+              if (err) return res.status(500).json({ error: err.message });
+              res.json({ ...updated, rake: { total, holders, entryId: existing ? existing.id : null } });
+            });
+          });
+
+          if (amount === 0) {
+            // A night that turns out to have had no rake leaves no trace in the
+            // pile, rather than a $0 row nobody can interpret later.
+            return existing
+              ? db.run('DELETE FROM rake_entries WHERE id = ?', [existing.id], (err) => err ? res.status(500).json({ error: err.message }) : done())
+              : done();
+          }
+          if (!creditedTo) {
+            return res.status(400).json({ error: 'Nobody is holding this rake — name a holder, or set a banker first.' });
+          }
+          if (existing) {
+            return db.run('UPDATE rake_entries SET amount = ?, toName = ? WHERE id = ?',
+              [amount, creditedTo, existing.id], (err) => err ? res.status(500).json({ error: err.message }) : done());
+          }
+          db.run(`INSERT INTO rake_entries (id, kind, amount, toName, sessionId, createdAt, createdBy)
+                  VALUES (?, 'session', ?, ?, ?, ?, 'tracker')`,
+            [generateId(), amount, creditedTo, sessionId, now],
+            (err) => err ? res.status(500).json({ error: err.message }) : done());
+        });
+      });
   });
 });
 

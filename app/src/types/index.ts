@@ -13,6 +13,10 @@ export interface Session {
    *  out. Distinct from `status`, which only means the game itself finished. */
   settledAt: string | null;
   settledBy: string | null;
+  /** Taken off the table before anyone is paid; $0 when none was taken. */
+  rakeAmount: number;
+  /** Who is holding it, by name. null means whoever banks this session. */
+  rakeHolder: string | null;
 }
 
 export interface Player {
@@ -45,7 +49,15 @@ export interface CashOut {
 export interface SessionTotals {
   totalPot: number;
   totalCashOut: number;
+  rake: number;
   isBalanced: boolean;
+}
+
+export interface RakeSummary {
+  amount: number;
+  holderName: string;
+  /** The banker is holding it, so no money moves for the rake. */
+  holderIsBank: boolean;
 }
 
 export interface Settlement {
@@ -68,6 +80,8 @@ export interface SettlementSummary {
   cashToDistribute: number;
   bankTransfersOut: number;
   bankTransfersIn: number;
+  /** null when no rake was taken. */
+  rake: RakeSummary | null;
 }
 
 export interface AppSettings {
