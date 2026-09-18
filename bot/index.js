@@ -36,7 +36,7 @@ import { calculateSettlements, identifyBankPlayer } from './settlement.js';
 import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage } from './results-message.js';
 import {
   formatSessionRakePost, formatSpendPost, formatGivePost, formatAdjustPost,
-  formatCorrectionPost, formatBalance,
+  formatCorrectionPost, formatBalance, rakeMirror,
 } from './rake-message.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
@@ -1477,7 +1477,11 @@ async function postToRakeChannel(content) {
 
 async function handleRakeCommand(interaction) {
   const sub = interaction.options.getSubcommand();
-  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  // Public on purpose: the pile belongs to everyone, and a balance or a spend
+  // that only the person who typed it can see is a record nobody else has.
+  // Discord fixes visibility when the command is acknowledged, before the bot
+  // knows whether it will succeed, so refusals are public too.
+  await interaction.deferReply();
 
   const balances = await trackerGet('/rake');
   if (sub === 'balance') {
@@ -1532,10 +1536,17 @@ async function handleRakeCommand(interaction) {
       ? formatGivePost(entry, after)
       : formatAdjustPost(entry, after);
 
-  const posted = await postToRakeChannel(post);
-  const suffix = posted.skipped
-    ? '\n_(no rake channel set — run `/setup rake_channel:#rake` to have this posted)_'
-    : posted.ok ? '' : `\n_(couldn't post to the rake channel: ${posted.error})_`;
+  // The reply is public, so run in the rake channel it is already the record.
+  // Mirroring it there would print the same post twice in a row.
+  const plan = rakeMirror({
+    commandChannelId: interaction.channelId,
+    rakeChannelId: settings().rakeChannelId,
+  });
+  let suffix = plan.hint;
+  if (plan.shouldMirror) {
+    const posted = await postToRakeChannel(post);
+    if (!posted.ok) suffix = `\n_(couldn't post to the rake channel: ${posted.error})_`;
+  }
 
   return respond(interaction, { content: `${post}${suffix}` });
 }

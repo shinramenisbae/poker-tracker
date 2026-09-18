@@ -7,6 +7,7 @@ import {
   formatAdjustPost,
   formatBalance,
   formatCorrectionPost,
+  rakeMirror,
 } from './rake-message.js';
 
 // The pile after the first session past the cut-off.
@@ -94,4 +95,23 @@ test('every post fits inside Discord s 2000-character limit with a big group', (
   const post = formatSessionRakePost({ date: '2026-09-23', notes: 'Big one' }, { amount: 133, holder: 'Player 1' }, crowded);
   assert.ok(post.length <= 2000, `post was ${post.length} characters`);
   assert.match(post, /and \d+ more/);
+});
+
+test('rakeMirror: run outside the rake channel, the record is mirrored there', () => {
+  const plan = rakeMirror({ commandChannelId: '111', rakeChannelId: '222' });
+  assert.equal(plan.shouldMirror, true);
+  assert.equal(plan.hint, '');
+});
+
+test('rakeMirror: run inside the rake channel, the public reply IS the record', () => {
+  // Mirroring here would print the same post twice in a row.
+  const plan = rakeMirror({ commandChannelId: '222', rakeChannelId: '222' });
+  assert.equal(plan.shouldMirror, false);
+  assert.equal(plan.hint, '');
+});
+
+test('rakeMirror: no rake channel set, say how to set one', () => {
+  const plan = rakeMirror({ commandChannelId: '111', rakeChannelId: '' });
+  assert.equal(plan.shouldMirror, false);
+  assert.match(plan.hint, /\/setup rake_channel/);
 });
