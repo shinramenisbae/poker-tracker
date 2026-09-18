@@ -34,6 +34,10 @@ import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
 import { calculateSettlements, identifyBankPlayer } from './settlement.js';
 import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage } from './results-message.js';
+import {
+  formatSessionRakePost, formatSpendPost, formatGivePost, formatAdjustPost,
+  formatCorrectionPost, formatBalance,
+} from './rake-message.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
@@ -952,6 +956,12 @@ const SETUP_COMMAND = new SlashCommandBuilder()
       .addChannelTypes(ChannelType.GuildText)
       .setRequired(false)
   )
+  .addChannelOption((o) =>
+    o.setName('rake_channel')
+      .setDescription('Channel for the rake pile — each session s rake and the running total.')
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(false)
+  )
   .addRoleOption((o) =>
     o.setName('poker_role')
       .setDescription('Role to @mention on results posts (pulls everyone into the thread).')
@@ -996,6 +1006,32 @@ const FINISH_COMMAND = new SlashCommandBuilder()
     o.setName('reopen')
       .setDescription('Undo a previous /finish and reopen the books.')
       .setRequired(false));
+
+// /rake — the pile: what each night added, what was spent out of it, and who
+// is holding what. The tracker owns the ledger; this is the way into it that
+// doesn't involve opening a browser at 2am.
+const RAKE_COMMAND = new SlashCommandBuilder()
+  .setName('rake')
+  .setDescription('The rake pile: balances, spending, and handing it on.')
+  .setDMPermission(false)
+  .addSubcommand((c) =>
+    c.setName('balance').setDescription('What is in the pile and who is holding it.'))
+  .addSubcommand((c) =>
+    c.setName('spend')
+      .setDescription('Record rake you spent on something for the group.')
+      .addNumberOption((o) => o.setName('amount').setDescription('How much was spent.').setRequired(true))
+      .addStringOption((o) => o.setName('note').setDescription('What it went on, e.g. new chips.').setRequired(false)))
+  .addSubcommand((c) =>
+    c.setName('give')
+      .setDescription('Hand your rake to someone else.')
+      .addStringOption((o) => o.setName('to').setDescription('Who is taking it.').setRequired(true))
+      .addNumberOption((o) => o.setName('amount').setDescription('How much.').setRequired(true)))
+  .addSubcommand((c) =>
+    c.setName('adjust')
+      .setDescription('Correct someone s rake balance (Manage Server only).')
+      .addStringOption((o) => o.setName('player').setDescription('Whose balance.').setRequired(true))
+      .addNumberOption((o) => o.setName('amount').setDescription('Positive adds, negative takes away.').setRequired(true))
+      .addStringOption((o) => o.setName('note').setDescription('Why.').setRequired(false)));
 
 // /help — the sequence, not a command list. Discord's picker already lists
 // commands; what it can't say is the order, or this server's own settings.
@@ -1045,10 +1081,10 @@ async function registerSlashCommands() {
       body: [
         PAID_COMMAND.toJSON(), UNPAID_COMMAND.toJSON(), LINK_COMMAND.toJSON(),
         SETUP_COMMAND.toJSON(), SETTINGS_COMMAND.toJSON(), SETUP_ROLES_COMMAND.toJSON(),
-        FINISH_COMMAND.toJSON(), HELP_COMMAND.toJSON(),
+        FINISH_COMMAND.toJSON(), HELP_COMMAND.toJSON(), RAKE_COMMAND.toJSON(),
       ],
     });
-    console.log('Registered /paid, /unpaid, /link, /setup, /settings, /setup-roles, /finish and /help slash commands.');
+    console.log('Registered /paid, /unpaid, /link, /setup, /settings, /setup-roles, /finish, /help and /rake slash commands.');
   } catch (err) {
     console.error('Slash command registration failed:', err.message);
   }
@@ -1212,6 +1248,7 @@ async function handleUnpaidCommand(interaction) {
 // option is optional, so it doubles as "change one thing later".
 async function handleSetupCommand(interaction) {
   const channel = interaction.options.getChannel('channel');
+  const rakeChannel = interaction.options.getChannel('rake_channel');
   const pokerRole = interaction.options.getRole('poker_role');
   const hotRole = interaction.options.getRole('hot_role');
   const coldRole = interaction.options.getRole('cold_role');
@@ -1221,6 +1258,7 @@ async function handleSetupCommand(interaction) {
 
   const update = { guildId: interaction.guildId, guildName: interaction.guild?.name || null };
   if (channel) update.channelId = channel.id;
+  if (rakeChannel) update.rakeChannelId = rakeChannel.id;
   if (pokerRole) update.pokerRoleId = pokerRole.id;
   if (hotRole) update.hotRoleId = hotRole.id;
   if (coldRole) update.coldRoleId = coldRole.id;
@@ -1274,6 +1312,7 @@ function describeSettings() {
 
   return [
     line('Watched channel', s.channelId ? `<#${s.channelId}>` : '', 'channelId'),
+    line('Rake channel', s.rakeChannelId ? `<#${s.rakeChannelId}>` : '', 'rakeChannelId'),
     line('Results ping role', s.pokerRoleId ? `<@&${s.pokerRoleId}>` : '', 'pokerRoleId'),
     line('Running Hot role', s.hotRoleId ? `<@&${s.hotRoleId}>` : '', 'hotRoleId'),
     line('Running Cold role', s.coldRoleId ? `<@&${s.coldRoleId}>` : '', 'coldRoleId'),
@@ -1413,6 +1452,94 @@ async function assignPingRole(guild, role, isAssignable) {
 }
 
 // /finish — record that the bank player has settled up both ways.
+// -------- /rake --------
+//
+// Spending and handing over come out of the caller's own balance, so the bot
+// has to know who they are — the same /link mapping /paid uses. Manage Server
+// can act for anyone, and is the only one who can correct a balance outright.
+
+/** Post into the rake channel, when one is configured. Never throws. */
+async function postToRakeChannel(content) {
+  const channelId = settings().rakeChannelId;
+  if (!channelId) return { ok: true, skipped: 'no rake channel configured' };
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      return { ok: false, error: `Rake channel ${channelId} is not a text channel` };
+    }
+    const message = await channel.send({ content, allowedMentions: { parse: [] } });
+    return { ok: true, messageId: message.id };
+  } catch (err) {
+    console.error('rake post failed:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function handleRakeCommand(interaction) {
+  const sub = interaction.options.getSubcommand();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  const balances = await trackerGet('/rake');
+  if (sub === 'balance') {
+    return respond(interaction, { content: formatBalance(balances) });
+  }
+
+  const links = await getDiscordLinks();
+  const callerName = links[interaction.user.id] || null;
+  const isAdmin = Boolean(interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild));
+
+  if (sub === 'adjust' && !isAdmin) {
+    return respond(interaction, { content: '⚠️ Only someone with **Manage Server** can correct a rake balance.' });
+  }
+  if (sub !== 'adjust' && !callerName) {
+    return respond(interaction, {
+      content: '⚠️ I don\'t know who you are yet. Run `/link player:<your name>` first.',
+    });
+  }
+
+  const amount = interaction.options.getNumber('amount');
+  const note = interaction.options.getString('note') || null;
+
+  let entry;
+  if (sub === 'spend') {
+    entry = { kind: 'spend', amount, fromName: callerName, note };
+  } else if (sub === 'give') {
+    entry = { kind: 'give', amount, fromName: callerName, toName: interaction.options.getString('to'), note };
+  } else {
+    // A negative adjustment takes rake off someone; a positive one adds it.
+    const player = interaction.options.getString('player');
+    entry = amount < 0
+      ? { kind: 'adjust', amount: Math.abs(amount), fromName: player, note }
+      : { kind: 'adjust', amount, toName: player, note };
+  }
+
+  let result;
+  try {
+    result = await trackerPost('/rake/entries', { ...entry, createdBy: interaction.user.username });
+  } catch (err) {
+    // The tracker refuses an overspend with the real balance in the message,
+    // which is the useful half of the error.
+    const detail = String(err.message || err).replace(/^POST [^:]+: \d+: /, '');
+    let reason = detail;
+    try { reason = JSON.parse(detail).error || detail; } catch { /* not JSON */ }
+    return respond(interaction, { content: `⚠️ ${reason}` });
+  }
+
+  const after = { total: result.total, holders: result.holders };
+  const post = sub === 'spend'
+    ? formatSpendPost(entry, after)
+    : sub === 'give'
+      ? formatGivePost(entry, after)
+      : formatAdjustPost(entry, after);
+
+  const posted = await postToRakeChannel(post);
+  const suffix = posted.skipped
+    ? '\n_(no rake channel set — run `/setup rake_channel:#rake` to have this posted)_'
+    : posted.ok ? '' : `\n_(couldn't post to the rake channel: ${posted.error})_`;
+
+  return respond(interaction, { content: `${post}${suffix}` });
+}
+
 async function handleFinishCommand(interaction) {
   const ch = interaction.channel;
   const isThread = ch && [ChannelType.PublicThread, ChannelType.PrivateThread, ChannelType.AnnouncementThread].includes(ch.type);
@@ -1789,6 +1916,7 @@ client.on('interactionCreate', async (interaction) => {
     'setup-roles': handleSetupRolesCommand,
     finish: handleFinishCommand,
     help: handleHelpCommand,
+    rake: handleRakeCommand,
   };
   const handler = handlers[interaction.commandName];
   if (!handler) return;
@@ -2012,6 +2140,33 @@ app.post('/announce/:sessionId', withGuildFromRequest(async (req, res) => {
     res.json({ ok: true, threadId, threadName });
   } catch (err) {
     console.error('announce error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+}));
+
+// POST /session-rake/:sessionId — a session's rake was recorded or corrected.
+//
+// Body: {previousAmount} when it is a correction, so the post can say what
+// changed rather than silently showing a different number than last time.
+app.post('/session-rake/:sessionId', withGuildFromRequest(async (req, res) => {
+  try {
+    const session = await trackerGet(`/sessions/${req.params.sessionId}`);
+    const balances = await trackerGet('/rake');
+    const holder = session.rakeHolder
+      || (session.players || []).find((p) => p.id === session.bankPlayerId)?.name
+      || 'nobody named';
+
+    const previousAmount = Number((req.body || {}).previousAmount);
+    const isCorrection = Number.isFinite(previousAmount) && previousAmount !== Number(session.rakeAmount);
+
+    const content = isCorrection
+      ? formatCorrectionPost(session, { from: previousAmount, to: session.rakeAmount }, balances)
+      : formatSessionRakePost(session, { amount: session.rakeAmount, holder }, balances);
+
+    const posted = await postToRakeChannel(content);
+    res.json(posted.ok ? { ok: true, ...posted } : { ok: false, error: posted.error });
+  } catch (err) {
+    console.error('session-rake error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
 }));

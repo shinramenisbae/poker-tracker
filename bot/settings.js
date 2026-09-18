@@ -51,6 +51,9 @@ function resolveSettings(dbSettings, env = {}) {
     guildId: pick(db.guildId, ''),
     guildName: pick(db.guildName, ''),
     channelId: pick(db.channelId, env.DISCORD_CHANNEL_ID),
+    // Where the rake pile is posted. Unset is a working state: rake is still
+    // recorded, it is simply not announced anywhere.
+    rakeChannelId: pick(db.rakeChannelId, env.DISCORD_RAKE_CHANNEL_ID),
     pokerRoleId: pick(db.pokerRoleId, env.DISCORD_POKER_ROLE_ID),
     hotRoleId: pick(db.hotRoleId, env.DISCORD_HOT_ROLE_ID),
     coldRoleId: pick(db.coldRoleId, env.DISCORD_COLD_ROLE_ID),
@@ -59,6 +62,7 @@ function resolveSettings(dbSettings, env = {}) {
     chipDivisor,
     source: {
       channelId: source(db.channelId, env.DISCORD_CHANNEL_ID),
+      rakeChannelId: source(db.rakeChannelId, env.DISCORD_RAKE_CHANNEL_ID),
       pokerRoleId: source(db.pokerRoleId, env.DISCORD_POKER_ROLE_ID),
       hotRoleId: source(db.hotRoleId, env.DISCORD_HOT_ROLE_ID),
       coldRoleId: source(db.coldRoleId, env.DISCORD_COLD_ROLE_ID),
