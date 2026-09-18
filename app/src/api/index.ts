@@ -41,6 +41,31 @@ export async function endSession(id: string): Promise<EndSessionResult> {
   return handleResponse<EndSessionResult>(response);
 }
 
+export interface DiscordOutcome {
+  ok: boolean;
+  error?: string;
+  edited?: boolean;
+  skipped?: string;
+}
+// Hands the session's banking to another player. The server refuses once
+// anyone has paid, so this can reject with the reason.
+export async function changeBanker(sessionId: string, playerId: string): Promise<Session & { discord?: DiscordOutcome }> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/banker`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playerId }),
+  });
+  return handleResponse<Session & { discord?: DiscordOutcome }>(response);
+}
+
+export interface SessionPaymentsResponse {
+  paid: Record<string, { paidAt: string; paidBy: string | null }>;
+}
+export async function fetchSessionPayments(sessionId: string): Promise<SessionPaymentsResponse> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/payments`);
+  return handleResponse<SessionPaymentsResponse>(response);
+}
+
 export async function createSession(data: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/sessions`, {
     method: 'POST',
