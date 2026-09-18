@@ -33,6 +33,7 @@ import { classifyAttachment, attachmentTrigger, visionEnabled } from './triage.j
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
 import { calculateSettlements, identifyBankPlayer } from './settlement.js';
+import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage } from './results-message.js';
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
@@ -740,104 +741,6 @@ async function processThreadUnlocked(thread, trigger) {
 
   // 6. Hand log: upload if attached, else prompt for it.
   await processHandLogIfNeeded(thread, created.id, handLogCsvs);
-}
-
-// -------- Results message --------
-
-function computePerPlayerResults(session) {
-  // Returns [{name, profit}] sorted by profit desc
-  return (session.players || [])
-    .map((p) => {
-      const buyIn = (p.buyIns || []).reduce((s, b) => s + (Number(b.amount) || 0), 0);
-      const cashOut = p.cashOut ? Number(p.cashOut.amount) || 0 : Number(p.cashOutAmount) || 0;
-      return { name: p.name, profit: cashOut - buyIn };
-    })
-    .sort((a, b) => b.profit - a.profit);
-}
-
-function formatMoney(n) {
-  const sign = n >= 0 ? '+' : '−';
-  return `${sign}$${Math.abs(n).toFixed(2)}`;
-}
-
-function formatResultsMessage(session, results, bankAccounts) {
-  const winners = results.filter((r) => r.profit > 0.005);
-  const losers = results.filter((r) => r.profit < -0.005);
-  const evens = results.filter((r) => Math.abs(r.profit) <= 0.005);
-
-  const bankPlayer = winners[0]; // biggest winner
-  const bankInfo = bankPlayer ? bankAccounts[bankPlayer.name] : null;
-
-  // Settlement rows (cash vs bank split), keyed by player name for lookup. This
-  // mirrors the Results page exactly, so e.g. a loser who paid partly in cash
-  // shows what's already covered on the table vs still owed via bank transfer.
-  const settlements = calculateSettlements(session);
-  const settleByName = new Map(settlements.map((s) => [s.playerName, s]));
-
-  let msg = `🎲 **Session results — ${session.date}**\n`;
-  msg += session.gameType === 'online' ? '🌐 _Online session_\n\n' : '🪑 _In-person session_\n\n';
-
-  if (winners.length > 0) {
-    msg += '🏆 **Winners**\n';
-    for (const w of winners) {
-      const isBank = w === bankPlayer;
-      msg += `• ${w.name}: **${formatMoney(w.profit)}**`;
-      if (isBank) {
-        msg += `  🏦 _(bank player — collects from losers)_\n`;
-      } else {
-        // Show bank info inline so the bank player can transfer winnings.
-        const info = bankAccounts[w.name];
-        if (info) {
-          msg += ` → ${info.displayName} \`${info.account}\`\n`;
-        } else {
-          msg += ` → _(no account on file)_\n`;
-        }
-      }
-    }
-    msg += '\n';
-  }
-
-  if (losers.length > 0) {
-    msg += `💸 **Losers** _(pay ${bankPlayer ? bankPlayer.name : 'the bank player'})_\n`;
-    for (const l of losers) {
-      msg += `• ${l.name}: ${formatMoney(l.profit)}`;
-      // Annotate how the loss settles: cash already on the table vs bank transfer
-      // still owed. Only show when there's a meaningful cash component, so the
-      // common all-bank loser stays a clean one-liner.
-      const s = settleByName.get(l.name);
-      if (s && s.cashBuyIn > 0.005) {
-        const owed = s.bankOwed || 0;
-        if (owed > 0.005) {
-          msg += `  _(paid ${formatCash(s.cashBuyIn)} cash, owes ${formatCash(owed)} via bank)_`;
-        } else {
-          msg += `  _(paid in cash on the table)_`;
-        }
-      }
-      msg += '\n';
-    }
-    msg += '\n';
-  }
-
-  if (evens.length > 0) {
-    msg += `⚖️ **Even**: ${evens.map((e) => e.name).join(', ')}\n\n`;
-  }
-
-  if (bankPlayer) {
-    msg += `🏦 **Bank player: ${bankPlayer.name}**\n`;
-    if (bankInfo) {
-      msg += `   ${bankInfo.displayName}\n`;
-      msg += `   \`${bankInfo.account}\`\n`;
-    } else {
-      msg += `   _(no bank account on file — losers, please ask ${bankPlayer.name} for their details)_\n`;
-    }
-  }
-
-  return msg;
-}
-
-// Plain dollar amount (no +/- sign), for cash/bank annotations.
-function formatCash(n) {
-  return `$${Math.abs(Number(n) || 0).toFixed(2)}`;
 }
 
 // Bank accounts live in the tracker DB. Fetch on demand so edits made in the
@@ -2109,6 +2012,64 @@ app.post('/announce/:sessionId', withGuildFromRequest(async (req, res) => {
     res.json({ ok: true, threadId, threadName });
   } catch (err) {
     console.error('announce error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+}));
+
+// POST /banker-changed/:sessionId — someone handed the banking to another
+// player in the tracker.
+//
+// The thread already told everyone who to pay, so it gets corrected two ways:
+// the results message is edited, for anyone scrolling back, and a short note is
+// posted, for anyone who read it days ago. No pings — the daily reminder
+// already chases people and now names the new banker by itself.
+app.post('/banker-changed/:sessionId', withGuildFromRequest(async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    const session = await trackerGet(`/sessions/${sessionId}`);
+    if (!session.discordThreadId) return res.json({ ok: true, skipped: 'not announced' });
+
+    const thread = await client.channels.fetch(session.discordThreadId).catch(() => null);
+    if (!thread || !thread.isThread()) {
+      return res.status(404).json({ error: `Thread ${session.discordThreadId} not found` });
+    }
+    await unarchiveIfArchived(thread);
+
+    const bankAccounts = await fetchBankAccounts();
+    const bankPlayer = (session.players || []).find((p) => p.id === session.bankPlayerId) || null;
+    const bankName = bankPlayer ? bankPlayer.name : null;
+    const previousName = (req.body && req.body.previousBankPlayerName) || null;
+
+    // The results post is ours and starts with a known heading; anything else
+    // in the thread is somebody's conversation and is left alone.
+    const messages = await thread.messages.fetch({ limit: 50 });
+    const posted = messages.find(
+      (m) => m.author.id === client.user.id && m.content.includes('**Session results —')
+    );
+    let edited = false;
+    if (posted) {
+      const rebuilt = rebuildResultsMessage(
+        posted.content,
+        formatResultsMessage(session, computePerPlayerResults(session), bankAccounts)
+      );
+      await posted.edit({ content: rebuilt, allowedMentions: { parse: [] } });
+      edited = true;
+    }
+
+    const info = bankName ? bankAccounts[bankName] : null;
+    let note = `🏦 **Banker changed${bankName ? ` to ${bankName}` : ''}**`;
+    if (previousName) note += ` _(was ${previousName})_`;
+    note += bankName ? ` — pay ${bankName} instead.\n` : '.\n';
+    if (info) {
+      note += `   ${info.displayName}\n   \`${info.account}\`\n`;
+    } else if (bankName) {
+      note += `   _(no bank account on file — losers, please ask ${bankName} for their details)_\n`;
+    }
+    await sendToThread(thread, { content: note, allowedMentions: { parse: [] } });
+
+    res.json({ ok: true, edited, bankPlayerName: bankName });
+  } catch (err) {
+    console.error('banker-changed error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
 }));
