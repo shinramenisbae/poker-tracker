@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./database');
 const { endSession } = require('./end-session');
+const { canChangeBanker } = require('./change-banker');
+const { pickBankPlayer } = require('./bank-player');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
@@ -415,6 +417,65 @@ app.post('/api/sessions/:id/end', async (req, res) => {
     if (err.code === 'ALREADY_COMPLETED') return res.status(409).json({ error: err.message });
     res.status(500).json({ error: err.message });
   }
+});
+
+// PUT /api/sessions/:id/banker — hand the session's banking to someone else.
+//
+// The biggest winner banks by default, which is sometimes the wrong person:
+// a newcomer wins big and the group would rather a regular held the money.
+// Refused once anyone has paid, because the money is already moving toward the
+// name everyone was given.
+app.put('/api/sessions/:id/banker', (req, res) => {
+  const sessionId = req.params.id;
+  const playerId = ((req.body && req.body.playerId) || '').trim();
+  if (!playerId) return res.status(400).json({ error: 'playerId required' });
+
+  readSession(sessionId, (err, session) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    db.get('SELECT COUNT(*) AS n FROM session_payments WHERE sessionId = ?', [sessionId], (err, row) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      const verdict = canChangeBanker({ session, playerId, paidCount: row ? row.n : 0 });
+      if (!verdict.ok) {
+        return res.status(verdict.code === 'UNKNOWN_PLAYER' ? 400 : 409)
+          .json({ error: verdict.reason, code: verdict.code });
+      }
+
+      // Who the thread currently names. An online session has no stored banker,
+      // so it is showing the biggest winner — the same fallback everything else
+      // uses — and that is the name people would be told to pay.
+      const effectivePreviousId = session.bankPlayerId || pickBankPlayer(
+        session.players.map((p) => ({
+          id: p.id,
+          cashOutAmount: p.cashOut ? p.cashOut.amount : null,
+          totalBuyIn: (p.buyIns || []).reduce((sum, b) => sum + b.amount, 0),
+        }))
+      );
+      const previous = session.players.find((p) => p.id === effectivePreviousId) || null;
+
+      const now = new Date().toISOString();
+      db.run('UPDATE sessions SET bankPlayerId = ?, updatedAt = ? WHERE id = ?',
+        [playerId, now, sessionId], async function (err) {
+          if (err) return res.status(500).json({ error: err.message });
+
+          // Discord is told after the fact and never blocks the change: the
+          // tracker is the record, the thread is a copy of it.
+          let discord = { ok: true, skipped: 'not announced' };
+          if (session.discordThreadId) {
+            discord = await callBot(`/banker-changed/${encodeURIComponent(sessionId)}`, {
+              previousBankPlayerName: previous ? previous.name : null,
+            });
+          }
+
+          readSession(sessionId, (err, updated) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ ...updated, discord });
+          });
+        });
+    });
+  });
 });
 
 // DELETE /api/sessions/:id - Delete session
@@ -1611,6 +1672,25 @@ function forwardToBot(botPath) {
       res.status(502).json({ error: `Could not reach bot at ${BOT_BASE}: ${err.message}` });
     }
   };
+}
+
+// Best-effort call into the bot, for when the tracker's own write has already
+// succeeded and Discord is a copy that should follow: the result is reported to
+// the caller rather than failing their request.
+async function callBot(botPath, body = {}) {
+  try {
+    const url = `${BOT_BASE}${botPath}${GUILD_ID ? `${botPath.includes('?') ? '&' : '?'}guildId=${encodeURIComponent(GUILD_ID)}` : ''}`;
+    const botRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const payload = await botRes.json().catch(() => ({}));
+    if (!botRes.ok) return { ok: false, error: `Bot returned ${botRes.status}`, details: payload };
+    return { ok: true, ...payload };
+  } catch (err) {
+    return { ok: false, error: `Could not reach the bot at ${BOT_BASE}: ${err.message}` };
+  }
 }
 
 app.post('/api/sessions/:id/announce-discord', forwardToBot(

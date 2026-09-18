@@ -4,6 +4,7 @@ import {
   fetchSessions as apiFetchSessions,
   fetchSession as apiFetchSession,
   endSession as apiEndSession,
+  changeBanker as apiChangeBanker,
   createSession as apiCreateSession,
   updateSession as apiUpdateSession,
   deleteSession as apiDeleteSession,
@@ -157,6 +158,25 @@ export function useSessions(sessionId?: string) {
       const message = err instanceof Error ? err.message : 'Failed to end session';
       setError(message);
       console.error('Error ending session:', err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Hand the banking to another player. Discord is corrected server-side; its
+  // outcome rides along on the response rather than failing the change.
+  const changeBanker = useCallback(async (id: string, playerId: string) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updated = await apiChangeBanker(id, playerId);
+      setSessions((prev) => prev.map((session) => (session.id === id ? updated : session)));
+      return updated;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to change the banker';
+      setError(message);
+      console.error('Error changing banker:', err);
       throw err;
     } finally {
       setIsLoading(false);
@@ -317,6 +337,7 @@ export function useSessions(sessionId?: string) {
     addSession,
     updateSession,
     endSession,
+    changeBanker,
     deleteSession,
     getSession,
     addPlayerToSession,

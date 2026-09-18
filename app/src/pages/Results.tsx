@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { SettlementView } from '../components/SettlementView';
@@ -8,12 +8,21 @@ import {
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
-import { announceSessionToDiscord, reannounceSessionToDiscord, type SessionMerge } from '../api';
+import {
+  announceSessionToDiscord,
+  reannounceSessionToDiscord,
+  fetchSessionPayments,
+  type SessionMerge,
+} from '../api';
 
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, isLoading, refreshSessions } = useSessions(id);
+  const { getSession, isLoading, refreshSessions, changeBanker } = useSessions(id);
+  const [paidCount, setPaidCount] = useState<number | null>(null);
+  const [showBankerPicker, setShowBankerPicker] = useState(false);
+  const [bankerError, setBankerError] = useState<string | null>(null);
+  const [bankerSaving, setBankerSaving] = useState(false);
   const [announceState, setAnnounceState] = useState<
     | { kind: 'idle' }
     | { kind: 'posting' }
@@ -27,6 +36,17 @@ export function Results() {
   // Handed over by End Session, not stored: it describes what just happened,
   // so it belongs in the navigation and is gone on reload.
   const merges = (useLocation().state as { merges?: SessionMerge[] } | null)?.merges ?? [];
+
+  // Whether anyone has paid yet decides if the banking can still move: once
+  // money is heading to the named banker, renaming them strands that payment.
+  useEffect(() => {
+    if (!id) return;
+    let active = true;
+    fetchSessionPayments(id)
+      .then((res) => { if (active) setPaidCount(Object.keys(res.paid || {}).length); })
+      .catch(() => { if (active) setPaidCount(null); });
+    return () => { active = false; };
+  }, [id]);
 
   // Detect prior announcement so the button reflects state.
   // Prefer the dedicated column; fall back to the legacy notes marker for
@@ -94,6 +114,26 @@ export function Results() {
   const totals = getSessionTotals(session);
   const summary = getSettlementSummary(session);
 
+  const bankerLockedReason = session.settledAt
+    ? 'The books are closed on this session — reopen it with /finish first.'
+    : paidCount && paidCount > 0
+      ? `${paidCount === 1 ? 'Someone has' : `${paidCount} people have`} already paid the current banker — unmark the payment first.`
+      : null;
+
+  async function handleChangeBanker(playerId: string) {
+    if (bankerSaving) return;
+    setBankerSaving(true);
+    setBankerError(null);
+    try {
+      await changeBanker(session!.id, playerId);
+      setShowBankerPicker(false);
+    } catch (err) {
+      setBankerError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBankerSaving(false);
+    }
+  }
+
   return (
     <div className="min-h-full bg-bg-primary">
       {/* Header */}
@@ -154,6 +194,32 @@ export function Results() {
           </div>
         </div>
 
+        {/* Who banks. The biggest winner by default, which is sometimes a
+            newcomer when the group would rather a regular held the money. */}
+        {summary && (
+          <div className="card mb-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-text-secondary">
+                Banking: <span className="font-semibold text-text-primary">{summary.bankPlayerName}</span>
+              </p>
+              <button
+                onClick={() => { setShowBankerPicker(true); setBankerError(null); }}
+                disabled={Boolean(bankerLockedReason) || bankerSaving}
+                className="btn-secondary text-sm px-3 py-1.5 disabled:opacity-50"
+                title={bankerLockedReason ?? 'Hand the banking to another player'}
+              >
+                Change banker
+              </button>
+            </div>
+            {bankerLockedReason && (
+              <p className="text-xs text-text-tertiary mt-2">{bankerLockedReason}</p>
+            )}
+            {bankerError && (
+              <p className="text-xs text-accent-negative mt-2">{bankerError}</p>
+            )}
+          </div>
+        )}
+
         {/* Settlement View */}
         {summary ? (
           <SettlementView summary={summary} />
@@ -164,6 +230,48 @@ export function Results() {
           </div>
         )}
       </main>
+
+      {/* Banker picker */}
+      {showBankerPicker && summary && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
+          <div className="bg-surface-primary w-full max-w-md sm:rounded-2xl rounded-t-2xl p-6">
+            <h2 className="text-xl font-semibold text-text-primary mb-1">Who is banking?</h2>
+            <p className="text-text-secondary text-sm mb-4">
+              Everyone pays this player, and they pay the winners out.
+            </p>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {session.players.map((p) => {
+                const net = (p.cashOut?.amount ?? 0) - p.buyIns.reduce((sum, b) => sum + b.amount, 0);
+                const isCurrent = p.id === summary.bankPlayerId;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => handleChangeBanker(p.id)}
+                    disabled={isCurrent || bankerSaving}
+                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border transition-colors disabled:opacity-60 ${
+                      isCurrent ? 'border-accent-primary bg-accent-primary/10' : 'border-bg-tertiary hover:bg-bg-tertiary'
+                    }`}
+                  >
+                    <span className="text-text-primary">
+                      {p.name}{isCurrent ? ' 🏦' : ''}
+                    </span>
+                    <span className={`tabular-nums text-sm ${net >= 0 ? 'text-accent-positive' : 'text-accent-negative'}`}>
+                      {net >= 0 ? '+' : '−'}{formatCurrency(Math.abs(net))}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setShowBankerPicker(false)}
+              disabled={bankerSaving}
+              className="w-full btn-secondary mt-4 disabled:opacity-50"
+            >
+              {bankerSaving ? 'Saving…' : 'Cancel'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer className="fixed bottom-0 left-0 right-0 bg-surface-primary border-t border-bg-tertiary p-4">
