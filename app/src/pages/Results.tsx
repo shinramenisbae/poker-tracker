@@ -18,11 +18,16 @@ import {
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, isLoading, refreshSessions, changeBanker } = useSessions(id);
+  const { getSession, isLoading, refreshSessions, changeBanker, setSessionRake } = useSessions(id);
   const [paidCount, setPaidCount] = useState<number | null>(null);
   const [showBankerPicker, setShowBankerPicker] = useState(false);
   const [bankerError, setBankerError] = useState<string | null>(null);
   const [bankerSaving, setBankerSaving] = useState(false);
+  const [rakeEditing, setRakeEditing] = useState(false);
+  const [rakeAmountInput, setRakeAmountInput] = useState('');
+  const [rakeHolderInput, setRakeHolderInput] = useState('');
+  const [rakeSaving, setRakeSaving] = useState(false);
+  const [rakeError, setRakeError] = useState<string | null>(null);
   const [announceState, setAnnounceState] = useState<
     | { kind: 'idle' }
     | { kind: 'posting' }
@@ -120,6 +125,32 @@ export function Results() {
       ? `${paidCount === 1 ? 'Someone has' : `${paidCount} people have`} already paid the current banker — unmark the payment first.`
       : null;
 
+  function openRakeEditor() {
+    setRakeAmountInput(String(session!.rakeAmount ?? 0));
+    setRakeHolderInput(session!.rakeHolder ?? '');
+    setRakeError(null);
+    setRakeEditing(true);
+  }
+
+  async function handleSaveRake() {
+    if (rakeSaving) return;
+    const amount = Number(rakeAmountInput);
+    if (!Number.isFinite(amount) || amount < 0) {
+      setRakeError('Enter $0 or more.');
+      return;
+    }
+    setRakeSaving(true);
+    setRakeError(null);
+    try {
+      await setSessionRake(session!.id, amount, rakeHolderInput.trim() || null);
+      setRakeEditing(false);
+    } catch (err) {
+      setRakeError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRakeSaving(false);
+    }
+  }
+
   async function handleChangeBanker(playerId: string) {
     if (bankerSaving) return;
     setBankerSaving(true);
@@ -189,9 +220,73 @@ export function Results() {
           </div>
           <div className="mt-4 text-center">
             <p className={`text-sm font-medium ${totals.isBalanced ? 'text-accent-positive' : 'text-accent-negative'}`}>
-              {totals.isBalanced ? '✓ Pot is balanced' : `⚠ Pot is off by ${formatCurrency(Math.abs(totals.totalPot - totals.totalCashOut))}`}
+              {totals.isBalanced
+                ? '✓ Pot is balanced'
+                : `⚠ Pot is off by ${formatCurrency(Math.abs(totals.totalPot - totals.totalCashOut - totals.rake))}`}
             </p>
           </div>
+        </div>
+
+        {/* Rake: money that left the table before anyone was paid, owed by the
+            bank to whoever is holding it. Editable with no lock — a typo in
+            the amount should not be permanent. */}
+        <div className="card mb-4">
+          {rakeEditing ? (
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="rake-amount" className="block text-sm font-medium text-text-secondary mb-1">
+                  Rake amount
+                </label>
+                <input
+                  id="rake-amount"
+                  type="number"
+                  value={rakeAmountInput}
+                  onChange={(e) => setRakeAmountInput(e.target.value)}
+                  className="input w-full"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label htmlFor="rake-holder" className="block text-sm font-medium text-text-secondary mb-1">
+                  Held by
+                </label>
+                <input
+                  id="rake-holder"
+                  type="text"
+                  value={rakeHolderInput}
+                  onChange={(e) => setRakeHolderInput(e.target.value)}
+                  placeholder={summary ? `${summary.bankPlayerName} (whoever banks)` : 'Whoever banks'}
+                  className="input w-full"
+                  list="rake-holder-options"
+                />
+                <datalist id="rake-holder-options">
+                  {session.players.map((p) => <option key={p.id} value={p.name} />)}
+                </datalist>
+              </div>
+              {rakeError && <p className="text-xs text-accent-negative">{rakeError}</p>}
+              <div className="flex gap-2">
+                <button onClick={() => setRakeEditing(false)} disabled={rakeSaving} className="flex-1 btn-secondary disabled:opacity-50">
+                  Cancel
+                </button>
+                <button onClick={handleSaveRake} disabled={rakeSaving} className="flex-1 btn-primary disabled:opacity-50">
+                  {rakeSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-text-secondary">
+                🧾 Rake:{' '}
+                <span className="font-semibold text-text-primary tabular-nums">{formatCurrency(totals.rake)}</span>
+                {totals.rake > 0 && summary && (
+                  <> — held by <span className="font-semibold text-text-primary">{summary.rake?.holderName}</span></>
+                )}
+              </p>
+              <button onClick={openRakeEditor} className="btn-secondary text-sm px-3 py-1.5">
+                Edit rake
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Who banks. The biggest winner by default, which is sometimes a

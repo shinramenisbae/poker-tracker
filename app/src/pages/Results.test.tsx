@@ -15,6 +15,7 @@ const session = (over: Record<string, unknown> = {}) => ({
   id: 's1', date: '2026-09-16', status: 'completed', notes: 'Warm up sesh',
   bankPlayerId: 's1-daniel', gameType: 'in-person', createdAt: '2026-09-16T04:00:00.000Z',
   updatedAt: '2026-09-16T12:00:00.000Z', discordThreadId: null, settledAt: null, settledBy: null,
+  rakeAmount: 0, rakeHolder: null,
   players: [
     player('s1-daniel', 'Daniel H', 200, 1415),
     player('s1-stephen', 'Stephen', 100, 300),
@@ -84,6 +85,43 @@ describe('Results', () => {
       const call = fetchMock.mock.calls.find(([url]) => url === '/api/sessions/s1/banker');
       expect(call).toBeDefined();
       expect(call?.[1]).toMatchObject({ method: 'PUT', body: JSON.stringify({ playerId: 's1-stephen' }) });
+    });
+  });
+
+  it('shows the rake and who is holding it', async () => {
+    stubApi({
+      '/api/sessions/s1': session({ rakeAmount: 133, rakeHolder: 'Stephen' }),
+      '/api/sessions/s1/payments': { paid: {} },
+    });
+
+    renderResults();
+
+    const rakeLine = await screen.findByText(/🧾 Rake:/);
+    expect(rakeLine).toHaveTextContent('$133.00');
+    expect(rakeLine).toHaveTextContent('held by Stephen');
+  });
+
+  it('corrects a mistyped rake', async () => {
+    const fetchMock = stubApi({
+      '/api/sessions/s1': session({ rakeAmount: 133, rakeHolder: 'Stephen' }),
+      '/api/sessions/s1/payments': { paid: {} },
+      '/api/sessions/s1/rake': { ...session({ rakeAmount: 143, rakeHolder: 'Stephen' }), rake: { total: 884.5, holders: [] } },
+    });
+
+    renderResults();
+    await waitFor(() => expect(screen.getByRole('button', { name: /edit rake/i })).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: /edit rake/i }));
+    const amount = await screen.findByLabelText(/rake amount/i);
+    await userEvent.clear(amount);
+    await userEvent.type(amount, '143');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => url === '/api/sessions/s1/rake');
+      expect(call).toBeDefined();
+      expect(call?.[1]).toMatchObject({ method: 'PUT' });
+      expect(JSON.parse(String((call?.[1] as RequestInit).body))).toEqual({ amount: 143, holder: 'Stephen' });
     });
   });
 

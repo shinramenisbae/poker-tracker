@@ -5,6 +5,7 @@ import {
   fetchSession as apiFetchSession,
   endSession as apiEndSession,
   changeBanker as apiChangeBanker,
+  setSessionRake as apiSetSessionRake,
   createSession as apiCreateSession,
   updateSession as apiUpdateSession,
   deleteSession as apiDeleteSession,
@@ -147,11 +148,11 @@ export function useSessions(sessionId?: string) {
 
   // Ending a session is the server's job: it merges a player who cashed out and
   // rejoined, then picks the banker from the merged results.
-  const endSession = useCallback(async (id: string) => {
+  const endSession = useCallback(async (id: string, rake: { amount: number; holder: string | null } = { amount: 0, holder: null }) => {
     setIsLoading(true);
     setError(null);
     try {
-      const finished = await apiEndSession(id);
+      const finished = await apiEndSession(id, rake);
       setSessions((prev) => prev.map((session) => (session.id === id ? finished : session)));
       return finished;
     } catch (err) {
@@ -177,6 +178,24 @@ export function useSessions(sessionId?: string) {
       const message = err instanceof Error ? err.message : 'Failed to change the banker';
       setError(message);
       console.error('Error changing banker:', err);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Correct a night's rake, or move who holds it.
+  const setSessionRake = useCallback(async (id: string, amount: number, holder: string | null) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const updated = await apiSetSessionRake(id, amount, holder);
+      setSessions((prev) => prev.map((session) => (session.id === id ? updated : session)));
+      return updated;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to save the rake';
+      setError(message);
+      console.error('Error saving rake:', err);
       throw err;
     } finally {
       setIsLoading(false);
@@ -338,6 +357,7 @@ export function useSessions(sessionId?: string) {
     updateSession,
     endSession,
     changeBanker,
+    setSessionRake,
     deleteSession,
     getSession,
     addPlayerToSession,

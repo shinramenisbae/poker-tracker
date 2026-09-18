@@ -99,6 +99,18 @@ function formatResultsMessage(session, results, bankAccounts) {
     msg += `⚖️ **Even**: ${evens.map((e) => e.name).join(', ')}\n\n`;
   }
 
+  // Rake left the table before anyone was paid. It is owed by the bank to
+  // whoever is holding it, so the line says who that is — and says nothing at
+  // all on a night when none was taken.
+  const rakeAmount = Number(session.rakeAmount) || 0;
+  if (rakeAmount > 0.005) {
+    const holder = session.rakeHolder || (bankPlayer ? bankPlayer.name : null);
+    const heldByBank = bankPlayer && holder === bankPlayer.name;
+    msg += heldByBank
+      ? `🧾 **Rake**: ${formatCash(rakeAmount)} — kept by ${holder}\n\n`
+      : `🧾 **Rake**: ${formatCash(rakeAmount)} → ${holder || 'nobody named'}\n\n`;
+  }
+
   if (bankPlayer) {
     msg += `🏦 **Bank player: ${bankPlayer.name}**\n`;
     if (bankInfo) {

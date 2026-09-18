@@ -59,6 +59,20 @@ test('formatResultsMessage: a stored banker who has left the session falls back'
   assert.match(msg, /🏦 \*\*Bank player: Daniel H\*\*/);
 });
 
+test('formatResultsMessage: rake is shown as owed to whoever holds it', () => {
+  const msg = messageFor(session({ rakeAmount: 133, rakeHolder: 'Stephen' }));
+  assert.match(msg, /🧾 \*\*Rake\*\*: \$133\.00 → Stephen/);
+});
+
+test('formatResultsMessage: rake held by the banker moves no money', () => {
+  const msg = messageFor(session({ rakeAmount: 133, rakeHolder: null }));
+  assert.match(msg, /🧾 \*\*Rake\*\*: \$133\.00 — kept by Daniel H/);
+});
+
+test('formatResultsMessage: a night with no rake says nothing about it', () => {
+  assert.doesNotMatch(messageFor(session({ rakeAmount: 0 })), /Rake/);
+});
+
 const STREAK_TAIL = '\n📈 **Streak watch**\n🔥 Jordan has won 3 in a row\n\n\n_New here? Run `/help`._';
 
 test('rebuildResultsMessage: the streak lines posted at the time are kept', () => {
