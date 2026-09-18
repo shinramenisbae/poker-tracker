@@ -27,6 +27,23 @@ test('players-by-session lookup uses an index, not a table scan', async () => {
   assert.match(detail, /SEARCH players USING INDEX/);
 });
 
+test('a session can only carry one rake row', async () => {
+  // Correcting a typo has to edit that row; crediting the holder a second time
+  // would quietly inflate the pile.
+  const insert = (id) => new Promise((resolve) => {
+    db.run(
+      `INSERT INTO rake_entries (id, kind, amount, toName, sessionId, createdAt)
+       VALUES (?, 'session', 133, 'Daniel H', 'session-1', '2026-09-16T12:00:00.000Z')`,
+      [id],
+      function (err) { resolve(err); }
+    );
+  });
+
+  assert.equal(await insert('rake-1'), null);
+  const second = await insert('rake-2');
+  assert.match(String(second), /UNIQUE constraint failed/);
+});
+
 test('buy-ins-by-player lookup uses an index and needs no extra sort', async () => {
   const detail = await plan('SELECT * FROM buyIns WHERE playerId = ? ORDER BY timestamp');
   assert.match(detail, /SEARCH buyIns USING INDEX/);
