@@ -86,7 +86,28 @@ function formatBalance(balances) {
   return [`🧾 **Rake pile: ${money(balances.total)}**`, ...lines].join('\n');
 }
 
+/**
+ * Whether a /rake reply also needs mirroring into the rake channel.
+ *
+ * The replies are public, so wherever the command was run everyone present
+ * sees the result. Run inside the rake channel that reply is already the
+ * record, and posting it again would print the same thing twice in a row.
+ *
+ * @param {{commandChannelId: string, rakeChannelId: string}} args
+ * @returns {{shouldMirror: boolean, hint: string}} hint is appended to the reply
+ */
+function rakeMirror({ commandChannelId, rakeChannelId }) {
+  if (!rakeChannelId) {
+    return {
+      shouldMirror: false,
+      hint: '\n_(no rake channel set — run `/setup rake_channel:#rake` to keep these together)_',
+    };
+  }
+  return { shouldMirror: String(commandChannelId) !== String(rakeChannelId), hint: '' };
+}
+
 export {
+  rakeMirror,
   formatSessionRakePost,
   formatSpendPost,
   formatGivePost,
