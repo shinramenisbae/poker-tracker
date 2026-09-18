@@ -145,9 +145,23 @@ changes during the game: re-adding a name still creates a second row.
   transaction, repointing `bankPlayerId` when it pointed at a merged-away row.
 - `POKER_DB` selects the database, so it runs for both groups.
 
-Group A has 111 affected sessions, mostly online imports from before the bot
-started aggregating by canonical name in May, plus a handful of in-person ones
-(Min on 30 August, Alvin on 11 June). Group B has none.
+Group A: 36 sessions merge, 74 rows, mostly online imports from before the bot
+started aggregating by canonical name, plus the in-person rejoins (Leo on
+16 September, Xavian and Jeremy on 19 April, George on 17 March). Group B has
+none.
+
+**One case the script refuses**, found while dry-running it against the real
+data (2026-09-18): 42 groups are the same ledger imported twice, not a player
+coming back. On 8 April 2026 Jordan has two rows of $70 in and $764.71 out,
+Paul two of $956.95, Nick four. Adding those together would double that
+player's night and bury the evidence that the import ran twice, so the script
+lists them as re-imports and leaves them alone; deleting the repeats is the
+fix and a separate job. Matching ignores buy-in timestamps, because an import
+stamps each row as it writes it — those two Jordan rows are 1.3 seconds apart.
+
+The live endpoint keeps the simple rule: a session ending today comes from the
+in-person flow, where every buy-in carries the moment it was tapped in, so two
+rows are never copies of each other.
 
 ## Tests (written first)
 
@@ -362,6 +376,7 @@ path (unlinked caller, non-admin adjusting, overspending).
 | Risk | Handling |
 |---|---|
 | Two different people with the same name get merged | The group already uses "Daniel H"/"Daniel Y"; the results note names every merge; the history script is reviewed before it runs |
+| History cleanup doubles a night that was imported twice | The script detects copied rows by their money rather than their timestamps, and refuses to merge them |
 | Banker changed after money has moved | Locked once any payment is marked, server-side |
 | Rake ledger drifts from the money in someone's pocket | Every change is an auditable row; `/rake balance` and the #rake posts read from it; admin adjustments correct it |
 | An old results post is edited long after the fact | Only the results portion is rebuilt; the streak tail is preserved verbatim |
