@@ -101,6 +101,29 @@ describe('useSessions', () => {
     expect(requestedUrls(fetchMock)).toEqual(['/api/sessions/missing']);
   });
 
+  it('endSession posts to the end endpoint and stores the finished session', async () => {
+    const finished = {
+      ...apiSession('s1', { status: 'completed', bankPlayerId: 's1-p1' }),
+      merges: [{ name: 'Leo', keepId: 's1-p1', entries: 2, totalBuyIn: 600, totalCashOut: 583 }],
+    };
+    const fetchMock = stubApi({
+      '/api/sessions/s1': [apiSession('s1')],
+      '/api/sessions/s1/end': [finished],
+    });
+
+    const { result } = renderHook(() => useSessions('s1'));
+    await waitFor(() => expect(result.current.getSession('s1')).toBeDefined());
+
+    let returned: Awaited<ReturnType<typeof result.current.endSession>> | undefined;
+    await act(async () => { returned = await result.current.endSession('s1'); });
+
+    expect(returned?.merges).toEqual([
+      { name: 'Leo', keepId: 's1-p1', entries: 2, totalBuyIn: 600, totalCashOut: 583 },
+    ]);
+    expect(result.current.getSession('s1')?.status).toBe('completed');
+    expect(requestedUrls(fetchMock)).toEqual(['/api/sessions/s1', '/api/sessions/s1/end']);
+  });
+
   // Home, Stats and Debts genuinely need every session.
   it('without an id, still loads the full list', async () => {
     const fetchMock = stubApi({ '/api/sessions': [[apiSession('s1'), apiSession('s2')]] });
