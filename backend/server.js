@@ -7,6 +7,8 @@ const { endSession } = require('./end-session');
 const { canChangeBanker } = require('./change-banker');
 const { pickBankPlayer } = require('./bank-player');
 const { balancesFrom, checkEntry, cents } = require('./rake-ledger');
+const { resolveMergedName, currentPlayerName, movePayments } = require('./merged-names');
+const { allAsync } = require('./db-async');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
@@ -243,8 +245,19 @@ app.get('/api/sessions/:id', (req, res) => {
 });
 
 // POST /api/sessions - Create new session
-app.post('/api/sessions', (req, res) => {
-  const { date, notes, players, gameType, status, discordThreadId } = req.body;
+app.post('/api/sessions', async (req, res) => {
+  const { date, notes, gameType, status, discordThreadId } = req.body;
+  // A name merged away on the aliases page lands on the player it was merged
+  // into, not on a stranger of the same name — see merged-names.js.
+  let players = req.body.players;
+  if (Array.isArray(players) && players.length > 0) {
+    try {
+      const removed = await allAsync(db, 'SELECT name, mergedInto FROM removed_canonicals');
+      players = players.map((player) => ({ ...player, name: resolveMergedName(player.name, removed) }));
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
   const id = generateId();
   const now = new Date().toISOString();
 
@@ -507,10 +520,16 @@ app.delete('/api/sessions/:id', (req, res) => {
 });
 
 // POST /api/sessions/:id/players - Add player
-app.post('/api/sessions/:id/players', (req, res) => {
+app.post('/api/sessions/:id/players', async (req, res) => {
   const sessionId = req.params.id;
-  const { name, paymentMethod } = req.body;
-  
+  const { paymentMethod } = req.body;
+  let name;
+  try {
+    name = await currentPlayerName(db, req.body.name);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+
   db.get('SELECT * FROM sessions WHERE id = ?', [sessionId], (err, session) => {
     if (err) {
       return res.status(500).json({ error: err.message });
@@ -1648,7 +1667,7 @@ app.get('/api/luck-leaderboard', (req, res) => {
 
 // POST /api/players/merge — collapse one canonical player into another.
 // Updates everywhere the name appears: per-session players, alias mappings,
-// hand-level EV rows. Irreversible (no undo) — use carefully.
+// hand-level EV rows, "paid" marks. Irreversible (no undo) — use carefully.
 //   body: { from: string, into: string }
 app.post('/api/players/merge', (req, res) => {
   const from = (req.body && req.body.from || '').trim();
@@ -1657,7 +1676,7 @@ app.post('/api/players/merge', (req, res) => {
   if (from === into) return res.status(400).json({ error: 'from and into must differ' });
 
   const now = new Date().toISOString();
-  let counts = { players: 0, aliasMappings: 0, handEvs: 0 };
+  let counts = { players: 0, aliasMappings: 0, handEvs: 0, payments: 0 };
   db.serialize(() => {
     db.run('UPDATE players SET name = ? WHERE name = ?', [into, from], function (err) {
       if (err) return res.status(500).json({ error: err.message });
@@ -1671,9 +1690,17 @@ app.post('/api/players/merge', (req, res) => {
         counts.aliasMappings = this.changes;
       }
     );
-    db.run('UPDATE hand_evs SET playerName = ? WHERE playerName = ?', [into, from], function (err) {
+    db.run('UPDATE hand_evs SET playerName = ? WHERE playerName = ?', [into, from], async function (err) {
       if (err) return res.status(500).json({ error: err.message });
       counts.handEvs = this.changes;
+
+      // "Paid" marks are keyed by name too. Left behind, every session the
+      // player had settled under the old name shows them owing again.
+      try {
+        counts.payments = await movePayments(db, from, into);
+      } catch (err2) {
+        return res.status(500).json({ error: err2.message });
+      }
 
       // Move bank details to the merge target if it has none of its own.
       db.run(
