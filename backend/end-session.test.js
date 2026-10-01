@@ -205,3 +205,78 @@ test('endSession: buy-ins keep their own timestamps after moving', async () => {
   assert.deepEqual(buyIns.map((b) => b.amount), [100, 200]);
   assert.equal(buyIns[0].timestamp, '2026-09-16T01:00:00.000Z');
 });
+
+// Rake counted live: people count it alongside the stacks, before anyone taps
+// End Session, so it is saved on the session while it is still active.
+const saveRakeLive = (sessionId, amount, holder = null) =>
+  runAsync(db, 'UPDATE sessions SET rakeAmount = ?, rakeHolder = ? WHERE id = ?', [amount, holder, sessionId]);
+
+test('endSession: the rake saved during the session is the one recorded', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Simon', buyIns: [2000], cashOut: 1180 },
+  ]);
+  await saveRakeLive(sessionId, 35, 'Jeremy');
+
+  const result = await endSession(db, sessionId, {});
+
+  const session = await getAsync(db, 'SELECT rakeAmount, rakeHolder FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 35);
+  assert.equal(session.rakeHolder, 'Jeremy');
+  assert.equal(result.rake.amount, 35);
+  assert.deepEqual(await rakeEntriesFor(sessionId), [
+    { kind: 'session', amount: 35, fromName: null, toName: 'Jeremy', note: null },
+  ]);
+});
+
+test('endSession: a saved rake with no holder still goes to the banker', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Simon', buyIns: [2000], cashOut: 1180 },
+  ]);
+  await saveRakeLive(sessionId, 35);
+
+  await endSession(db, sessionId, {});
+
+  const [entry] = await rakeEntriesFor(sessionId);
+  assert.equal(entry.toName, 'Daniel H');
+});
+
+test('endSession: an empty $0 from an old end-session form does not wipe the saved rake', async () => {
+  // A phone still showing the previous page sends rakeAmount 0 when its rake
+  // box was left blank. That is "nothing typed", not "there was no rake".
+  const sessionId = await seedSession([{ name: 'Simon', buyIns: [100], cashOut: 65 }]);
+  await saveRakeLive(sessionId, 35, 'Simon');
+
+  await endSession(db, sessionId, { rakeAmount: 0, rakeHolder: null });
+
+  const session = await getAsync(db, 'SELECT rakeAmount, rakeHolder FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 35);
+  assert.equal(session.rakeHolder, 'Simon');
+});
+
+test('endSession: a typed amount still replaces the saved one', async () => {
+  const sessionId = await seedSession([{ name: 'Simon', buyIns: [100], cashOut: 60 }]);
+  await saveRakeLive(sessionId, 35, 'Simon');
+
+  await endSession(db, sessionId, { rakeAmount: 40, rakeHolder: 'Jeremy' });
+
+  const session = await getAsync(db, 'SELECT rakeAmount, rakeHolder FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 40);
+  assert.equal(session.rakeHolder, 'Jeremy');
+});
+
+test('endSession: a saved rake wins over a leftover Rake player, as a typed one does', async () => {
+  const sessionId = await seedSession([
+    { name: 'Daniel H', buyIns: [200], cashOut: 1415 },
+    { name: 'Rake', buyIns: [], cashOut: 133 },
+  ]);
+  await saveRakeLive(sessionId, 140);
+
+  const result = await endSession(db, sessionId, {});
+
+  const session = await getAsync(db, 'SELECT rakeAmount FROM sessions WHERE id = ?', [sessionId]);
+  assert.equal(session.rakeAmount, 140);
+  assert.equal(result.rake.discardedPlayerAmount, 133);
+  assert.equal((await playersOf(sessionId)).length, 1);
+});

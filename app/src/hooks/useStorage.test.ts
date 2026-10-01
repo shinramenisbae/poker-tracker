@@ -122,6 +122,10 @@ describe('useSessions', () => {
     ]);
     expect(result.current.getSession('s1')?.status).toBe('completed');
     expect(requestedUrls(fetchMock)).toEqual(['/api/sessions/s1', '/api/sessions/s1/end']);
+    // Rake is entered on the live page and already saved on the session, so
+    // ending sends none — an empty field here must not stand in for "$0".
+    const [, endInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(String(endInit.body))).toEqual({});
   });
 
   // Home, Stats and Debts genuinely need every session.

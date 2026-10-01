@@ -51,7 +51,7 @@ function failure(code, message) {
  *          discardedPlayerAmount: number|null}}>}
  */
 async function endSession(db, sessionId, { rakeAmount, rakeHolder } = {}) {
-  const session = await getAsync(db, 'SELECT id, status FROM sessions WHERE id = ?', [sessionId]);
+  const session = await getAsync(db, 'SELECT id, status, rakeAmount, rakeHolder FROM sessions WHERE id = ?', [sessionId]);
   if (!session) throw failure('NOT_FOUND', 'Session not found');
   if (session.status === 'completed') {
     throw failure('ALREADY_COMPLETED', 'This session has already been ended');
@@ -65,7 +65,15 @@ async function endSession(db, sessionId, { rakeAmount, rakeHolder } = {}) {
 
     // Rake first: the pile is not a player, and leaving it in would let it
     // merge, win, and bank like one.
-    const typedAmount = Number(rakeAmount) || 0;
+    //
+    // It is usually counted with the stacks and saved on the session before
+    // anyone ends it. Only an amount typed here replaces that: an empty $0
+    // from a phone still showing the old end-of-session form means nothing
+    // was typed, not that there was no rake.
+    const typed = Number(rakeAmount) || 0;
+    const saved = Number(session.rakeAmount) || 0;
+    const typedAmount = typed > 0 ? typed : saved;
+    if (!(typed > 0) && saved > 0 && !(rakeHolder || '').trim()) rakeHolder = session.rakeHolder;
     const fromPlayer = rakeFromPlayers(await withBuyIns(db, players));
     for (const id of fromPlayer.removeIds) {
       await runAsync(db, 'DELETE FROM buyIns WHERE playerId = ?', [id]);
