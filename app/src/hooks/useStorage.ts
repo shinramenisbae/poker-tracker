@@ -148,7 +148,7 @@ export function useSessions(sessionId?: string) {
 
   // Ending a session is the server's job: it merges a player who cashed out and
   // rejoined, then picks the banker from the merged results.
-  const endSession = useCallback(async (id: string, rake: { amount: number; holder: string | null } = { amount: 0, holder: null }) => {
+  const endSession = useCallback(async (id: string, rake?: { amount: number; holder: string | null }) => {
     setIsLoading(true);
     setError(null);
     try {

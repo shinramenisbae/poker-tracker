@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getSessionTotals, getSettlementSummary } from './calculations';
+import { getSessionTotals, getSettlementSummary, getLiveBalance } from './calculations';
 import type { Session } from '../types';
 
 // Daniel H banks: $200 in, $1,415 out. Simon loses $820. Rake of $133 was taken
@@ -96,5 +96,42 @@ describe('getSettlementSummary with rake', () => {
     const withRake = getSettlementSummary(session({ rakeHolder: 'Stephen' }))!;
     const withoutRake = getSettlementSummary(session({ rakeAmount: 0 }))!;
     expect(withRake.settlements).toEqual(withoutRake.settlements);
+  });
+});
+
+// While stacks are being counted: rake is entered alongside the cash-outs, so
+// the live page can say whether the night adds up before anyone ends it.
+describe('getLiveBalance', () => {
+  it('square once every stack and the rake are counted', () => {
+    // $3,200 in = $3,067 cashed out + $133 rake.
+    expect(getLiveBalance(session({ status: 'active' }))).toEqual({ state: 'balanced' });
+  });
+
+  it('short when less came off the table than went in', () => {
+    // Rake not entered yet: $133 unaccounted for.
+    expect(getLiveBalance(session({ status: 'active', rakeAmount: 0 }))).toEqual({ state: 'short', by: 133 });
+  });
+
+  it('over when more came off the table than went in', () => {
+    expect(getLiveBalance(session({ status: 'active', rakeAmount: 150 }))).toEqual({ state: 'over', by: 17 });
+  });
+
+  it('still playing while anyone has chips on the table', () => {
+    const s = session({ status: 'active' });
+    s.players[2] = { ...s.players[2], cashOut: null };
+    // Leo's $1,000 is still in play: $3,200 − ($2,595 + $133).
+    expect(getLiveBalance(s)).toEqual({ state: 'playing', onTable: 472 });
+  });
+
+  it('cents do not show up as a false difference', () => {
+    const s = session({ status: 'active', rakeAmount: 0 });
+    s.players = [
+      { ...s.players[0], buyIns: [{ id: 'x', amount: 0.1, method: 'cash', timestamp: 0, notes: '' }, { id: 'y', amount: 0.2, method: 'cash', timestamp: 0, notes: '' }], cashOut: { amount: 0.3, timestamp: 0 } },
+    ];
+    expect(getLiveBalance(s)).toEqual({ state: 'balanced' });
+  });
+
+  it('a session with nobody in it yet is just playing', () => {
+    expect(getLiveBalance(session({ status: 'active', players: [], rakeAmount: 0 }))).toEqual({ state: 'playing', onTable: 0 });
   });
 });

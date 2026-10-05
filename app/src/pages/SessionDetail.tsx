@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import type { Player } from '../types';
@@ -8,6 +8,7 @@ import { BuyInsModal } from '../components/BuyInsModal';
 import {
   getTotalBuyIn,
   getSessionTotals,
+  getLiveBalance,
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
@@ -15,7 +16,7 @@ import {
 export function SessionDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, endSession, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
+  const { getSession, endSession, setSessionRake, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
 
   const session = getSession(id || '');
 
@@ -32,11 +33,13 @@ export function SessionDetail() {
   const [rebuyType, setRebuyType] = useState<'top-up' | 'stacked'>('top-up');
   const [stackedHand, setStackedHand] = useState('');
   const [editBuyInsPlayer, setEditBuyInsPlayer] = useState<Player | null>(null);
-  // Ending a session asks for the night's rake, because it is the one number
-  // nobody can reconstruct afterwards from what the tracker holds.
   const [showEndSession, setShowEndSession] = useState(false);
-  const [rakeAmount, setRakeAmount] = useState('');
-  const [rakeHolder, setRakeHolder] = useState('');
+  // The rake is counted with the stacks at the end of the night, so it is
+  // entered here while the session is live and saved straight away — anyone's
+  // phone then shows whether the night adds up. null means showing what is
+  // saved; otherwise it holds what is being typed.
+  const [rakeDraft, setRakeDraft] = useState<{ amount: string; holder: string } | null>(null);
+  const rakeInputRef = useRef<HTMLInputElement>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -67,7 +70,14 @@ export function SessionDetail() {
   }
 
   const totals = getSessionTotals(session);
+  const balance = getLiveBalance(session);
   const allCashedOut = session.players.length > 0 && session.players.every((p) => p.cashOut !== null);
+  const isLive = session.status === 'active';
+  const savedRake = session.rakeAmount ?? 0;
+  const rakeAmountShown = rakeDraft ? rakeDraft.amount : savedRake > 0 ? String(savedRake) : '';
+  const rakeHolderShown = rakeDraft ? rakeDraft.holder : session.rakeHolder ?? '';
+  const rakeChanged = rakeDraft !== null
+    && ((Number(rakeDraft.amount) || 0) !== savedRake || (rakeDraft.holder.trim() || null) !== (session.rakeHolder ?? null));
 
   // Re-resolve the cash-out target from the live session on every render, so the
   // modal reflects the latest stored cash-out (the same pattern the buy-ins
@@ -216,6 +226,43 @@ export function SessionDetail() {
     }
   };
 
+  // Returns whether the rake is now saved, so End Session can wait on it.
+  const handleSaveRake = async (): Promise<boolean> => {
+    if (!rakeDraft || actionLoading) return !rakeChanged;
+    const amount = Number(rakeDraft.amount);
+    if (rakeDraft.amount.trim() !== '' && (Number.isNaN(amount) || amount < 0)) {
+      setActionError('Rake must be $0 or more.');
+      return false;
+    }
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await setSessionRake(session.id, amount || 0, rakeDraft.holder.trim() || null);
+      setRakeDraft(null);
+      return true;
+    } catch {
+      setActionError('Failed to save the rake. Please try again.');
+      return false;
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // A rake typed but not saved yet is saved first, so End Session never ends
+  // the night on a different figure from the one on screen.
+  const openEndSession = async () => {
+    setActionError(null);
+    if (rakeChanged && !(await handleSaveRake())) return;
+    setRakeDraft(null);
+    setShowEndSession(true);
+  };
+
+  const editRakeFromEndSession = () => {
+    setShowEndSession(false);
+    rakeInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    rakeInputRef.current?.focus();
+  };
+
   const handleEndSession = async () => {
     if (actionLoading) return;
 
@@ -225,11 +272,8 @@ export function SessionDetail() {
     try {
       // The server merges any duplicate entries — a player who cashed out and
       // rejoined is one person — picks the banker from the merged results, and
-      // records the rake.
-      const { merges, rake } = await endSession(session.id, {
-        amount: Number(rakeAmount) || 0,
-        holder: rakeHolder.trim() || null,
-      });
+      // records the rake saved during the session in the ledger.
+      const { merges, rake } = await endSession(session.id);
       setShowEndSession(false);
       navigate(`/session/${session.id}/results`, { state: { merges, rake } });
     } catch {
@@ -299,10 +343,6 @@ export function SessionDetail() {
         <div className="card mb-6">
           <div className="grid grid-cols-3 gap-4">
             <div className="text-center">
-              <p className="text-number-sm text-text-primary">{session.players.length}</p>
-              <p className="text-xs text-text-tertiary mt-1">Players</p>
-            </div>
-            <div className="text-center">
               <p className="text-number-sm text-text-primary tabular-nums">
                 {formatCurrency(totals.totalPot)}
               </p>
@@ -310,9 +350,35 @@ export function SessionDetail() {
             </div>
             <div className="text-center">
               <p className="text-number-sm text-text-primary tabular-nums">
-                {formatCurrency(totals.totalCashOut)}
+                {formatCurrency(totals.totalCashOut + totals.rake)}
               </p>
-              <p className="text-xs text-text-tertiary mt-1">Cashed Out</p>
+              <p className="text-xs text-text-tertiary mt-1">
+                Cashed Out{totals.rake > 0 ? ` + ${formatCurrency(totals.rake)} rake` : ''}
+              </p>
+            </div>
+            {/* While anyone still holds chips the gap is just money in play;
+                once every stack and the rake are in, it is the check. */}
+            <div className="text-center" data-testid="live-balance">
+              {balance.state === 'playing' && (
+                <>
+                  <p className="text-number-sm text-text-primary tabular-nums">{formatCurrency(balance.onTable)}</p>
+                  <p className="text-xs text-text-tertiary mt-1">Still on the table</p>
+                </>
+              )}
+              {balance.state === 'balanced' && (
+                <>
+                  <p className="text-number-sm text-accent-positive">✓</p>
+                  <p className="text-xs text-accent-positive mt-1">Balanced</p>
+                </>
+              )}
+              {(balance.state === 'short' || balance.state === 'over') && (
+                <>
+                  <p className="text-number-sm text-accent-negative tabular-nums">{formatCurrency(balance.by)}</p>
+                  <p className="text-xs text-accent-negative mt-1">
+                    {balance.state === 'short' ? 'Short — missing' : 'Over — too much counted'}
+                  </p>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -351,6 +417,83 @@ export function SessionDetail() {
           >
             + Add Player
           </button>
+
+          {/* Rake: counted with the stacks, so it sits with them. Saving only
+              records the number — ending the session is what credits whoever
+              holds it and tells the rake channel. */}
+          {isLive && (
+            <div className="card">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-lg font-semibold text-text-primary">Rake</h2>
+                {!rakeChanged && savedRake > 0 && (
+                  <span className="text-sm text-text-secondary">Saved</span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="live-rake-amount" className="block text-xs font-medium text-text-secondary mb-1">
+                    Amount
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">$</span>
+                    <input
+                      id="live-rake-amount"
+                      ref={rakeInputRef}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      value={rakeAmountShown}
+                      onChange={(e) => setRakeDraft({ amount: e.target.value, holder: rakeHolderShown })}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleSaveRake(); }}
+                      placeholder="0.00"
+                      className="input w-full pl-7 tabular-nums"
+                      disabled={actionLoading}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="live-rake-holder" className="block text-xs font-medium text-text-secondary mb-1">
+                    Held by
+                  </label>
+                  <input
+                    id="live-rake-holder"
+                    type="text"
+                    value={rakeHolderShown}
+                    onChange={(e) => setRakeDraft({ amount: rakeAmountShown, holder: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveRake(); }}
+                    placeholder="The banker"
+                    className="input w-full"
+                    list="live-rake-holder-options"
+                    disabled={actionLoading}
+                  />
+                  <datalist id="live-rake-holder-options">
+                    {session.players.map((p) => <option key={p.id} value={p.name} />)}
+                  </datalist>
+                </div>
+              </div>
+              <p className="text-xs text-text-tertiary mt-2">
+                Leave "Held by" empty and it goes to whoever ends up banking.
+              </p>
+              {rakeChanged && (
+                <div className="flex gap-3 mt-3">
+                  <button
+                    onClick={() => { setRakeDraft(null); setActionError(null); }}
+                    disabled={actionLoading}
+                    className="flex-1 btn-secondary disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveRake}
+                    disabled={actionLoading}
+                    className="flex-1 btn-primary disabled:opacity-50"
+                  >
+                    {actionLoading ? 'Saving…' : 'Save rake'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </main>
 
@@ -364,7 +507,7 @@ export function SessionDetail() {
             View Results
           </button>
           <button
-            onClick={() => { setRakeAmount(''); setRakeHolder(''); setActionError(null); setShowEndSession(true); }}
+            onClick={openEndSession}
             disabled={!allCashedOut || session.status === 'completed' || actionLoading}
             className="flex-1 btn-primary disabled:opacity-50"
           >
@@ -377,54 +520,34 @@ export function SessionDetail() {
         </div>
       </footer>
 
-      {/* End Session: the rake is asked for here because it is the one number
-          that cannot be worked out afterwards from anything else stored. */}
+      {/* End Session: the rake was entered with the stacks, so this only
+          confirms it. A night that doesn't add up is flagged, not blocked —
+          sometimes a chip is simply gone and the night still has to close. */}
       {showEndSession && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50">
           <div className="bg-surface-primary w-full max-w-md sm:rounded-2xl rounded-t-2xl p-6">
-            <h2 className="text-xl font-semibold text-text-primary mb-2">End the session</h2>
-            <p className="text-text-secondary text-sm mb-4">
-              Anything taken for the rake, and who is holding it. Leave it at $0 if none was taken.
-            </p>
+            <h2 className="text-xl font-semibold text-text-primary mb-4">End the session</h2>
 
-            <div className="mb-4">
-              <label htmlFor="end-rake-amount" className="block text-sm font-medium text-text-secondary mb-2">
-                Rake
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-tertiary text-lg">$</span>
-                <input
-                  id="end-rake-amount"
-                  type="number"
-                  value={rakeAmount}
-                  onChange={(e) => setRakeAmount(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full h-16 pl-10 pr-4 text-2xl font-semibold bg-bg-tertiary rounded-xl border border-transparent focus:border-accent-primary focus:outline-none tabular-nums"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            <div className="mb-6">
-              <label htmlFor="end-rake-holder" className="block text-sm font-medium text-text-secondary mb-2">
-                Held by
-              </label>
-              <input
-                id="end-rake-holder"
-                type="text"
-                value={rakeHolder}
-                onChange={(e) => setRakeHolder(e.target.value)}
-                placeholder="Whoever banks tonight"
-                className="input w-full"
-                list="end-rake-holder-options"
-              />
-              <datalist id="end-rake-holder-options">
-                {session.players.map((p) => <option key={p.id} value={p.name} />)}
-              </datalist>
-              <p className="text-xs text-text-tertiary mt-1">
-                Leave empty and it follows the bank player.
+            <div className="flex items-center justify-between bg-bg-tertiary rounded-xl px-4 py-3 mb-4">
+              <p className="text-text-primary">
+                {savedRake > 0
+                  ? <>Rake <span className="font-semibold tabular-nums">{formatCurrency(savedRake)}</span>, held by {session.rakeHolder || 'the banker'}</>
+                  : 'No rake entered'}
               </p>
+              <button onClick={editRakeFromEndSession} className="text-sm font-medium text-accent-primary">
+                Edit
+              </button>
             </div>
+
+            {(balance.state === 'short' || balance.state === 'over') && (
+              <p className="text-sm text-accent-negative mb-4">
+                ⚠ The pot is {balance.state} by {formatCurrency(balance.by)}. You can still end the session,
+                but it's worth recounting first.
+              </p>
+            )}
+            {balance.state === 'balanced' && (
+              <p className="text-sm text-accent-positive mb-4">✓ The pot balances.</p>
+            )}
 
             <div className="flex gap-3">
               <button

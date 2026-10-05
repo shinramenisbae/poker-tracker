@@ -39,12 +39,13 @@ export type EndSessionResult = Session & { merges: SessionMerge[]; rake: Session
 
 // Ends a session: the server merges duplicate entries of one player, picks the
 // banker from the merged results, and records the night's rake — which is why
-// this isn't a plain update.
-export async function endSession(id: string, rake: { amount: number; holder: string | null } = { amount: 0, holder: null }): Promise<EndSessionResult> {
+// this isn't a plain update. The rake is normally already saved on the session
+// from the live page; pass one only to replace it.
+export async function endSession(id: string, rake?: { amount: number; holder: string | null }): Promise<EndSessionResult> {
   const response = await fetch(`${API_BASE_URL}/sessions/${id}/end`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ rakeAmount: rake.amount, rakeHolder: rake.holder }),
+    body: JSON.stringify(rake ? { rakeAmount: rake.amount, rakeHolder: rake.holder } : {}),
   });
   return handleResponse<EndSessionResult>(response);
 }

@@ -1075,9 +1075,30 @@ app.put('/api/sessions/:id/rake', (req, res) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!session) return res.status(404).json({ error: 'Session not found' });
 
+    const now = new Date().toISOString();
+
+    // Rake is counted with the stacks, before anyone ends the session. Until
+    // then it is only a number on the session: ending it is what credits the
+    // holder in the ledger and tells the rake channel, the same as when it was
+    // typed into the end-of-session form. Nobody is banking yet, either, so an
+    // empty holder simply waits for one.
+    if (session.status !== 'completed') {
+      return db.run('UPDATE sessions SET rakeAmount = ?, rakeHolder = ?, updatedAt = ? WHERE id = ?',
+        [amount, holder, now, sessionId], (err) => {
+          if (err) return res.status(500).json({ error: err.message });
+          readRakeEntries((err, entries) => {
+            if (err) return res.status(500).json({ error: err.message });
+            const { total, holders } = balancesFrom(entries);
+            readSession(sessionId, (err, updated) => {
+              if (err) return res.status(500).json({ error: err.message });
+              res.json({ ...updated, rake: { total, holders, entryId: null, discord: { ok: true, skipped: 'session still live' } } });
+            });
+          });
+        });
+    }
+
     const bankPlayer = (session.players || []).find((p) => p.id === session.bankPlayerId);
     const creditedTo = holder || (bankPlayer ? bankPlayer.name : null);
-    const now = new Date().toISOString();
 
     db.run('UPDATE sessions SET rakeAmount = ?, rakeHolder = ?, updatedAt = ? WHERE id = ?',
       [amount, holder, now, sessionId], function (err) {

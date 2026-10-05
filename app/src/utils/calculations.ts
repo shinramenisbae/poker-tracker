@@ -32,6 +32,34 @@ export function getSessionTotals(session: Session): SessionTotals {
   };
 }
 
+export type LiveBalance =
+  | { state: 'playing'; onTable: number }
+  | { state: 'balanced' }
+  | { state: 'short' | 'over'; by: number };
+
+/**
+ * Does tonight add up yet? The rake is counted alongside the stacks at the end
+ * of a night, so the live page checks buy-ins against cash-outs plus rake
+ * before anyone ends the session.
+ *
+ * While someone still has chips on the table the difference is just money in
+ * play, not a mistake, so it is reported as such. Once everyone has cashed
+ * out it is either square, short (less came off the table than went in), or
+ * over.
+ */
+export function getLiveBalance(session: Session): LiveBalance {
+  const { totalPot, totalCashOut, rake } = getSessionTotals(session);
+  const difference = Math.round((totalPot - totalCashOut - rake) * 100) / 100;
+  const players = session.players ?? [];
+  const everyoneOut = players.length > 0 && players.every((p) => p.cashOut !== null);
+
+  if (!everyoneOut) return { state: 'playing', onTable: difference };
+  if (Math.abs(difference) < 0.005) return { state: 'balanced' };
+  return difference > 0
+    ? { state: 'short', by: difference }
+    : { state: 'over', by: -difference };
+}
+
 export function identifyBankPlayer(session: Session): string | null {
   const playersWithResults = session.players
     .map((p) => ({ id: p.id, profit: getProfitLoss(p) }))
