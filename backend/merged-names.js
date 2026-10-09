@@ -52,6 +52,25 @@ function resolveMergedName(name, removed = []) {
   }
 }
 
+/**
+ * Whether a typed name was moved onto someone else, worth telling the table.
+ *
+ * A redirect is only as right as the merge behind it. "Daniel H" was merged
+ * into "Daniel" on 29 Jul 2026 although they are two people, and on 9 Oct he
+ * was entered as "Daniel" without anyone being told. Reporting the move is
+ * what lets the table catch a wrong merge on the night. A fix to the case or
+ * spacing alone ("jeremy" to "Jeremy") is not news and is not reported.
+ *
+ * @param {string} typed
+ * @param {string} resolved what resolveMergedName made of it
+ * @returns {{from: string, to: string} | null}
+ */
+function redirectOf(typed, resolved) {
+  if (typeof typed !== 'string' || !typed.trim()) return null;
+  if (normalizePlayerName(typed) === normalizePlayerName(resolved)) return null;
+  return { from: typed.trim(), to: resolved };
+}
+
 /** resolveMergedName against the database's merge record. */
 async function currentPlayerName(db, name) {
   if (typeof name !== 'string' || !name.trim()) return name;
@@ -88,4 +107,4 @@ async function movePayments(db, from, into) {
   return changes;
 }
 
-module.exports = { resolveMergedName, currentPlayerName, movePayments };
+module.exports = { resolveMergedName, redirectOf, currentPlayerName, movePayments };

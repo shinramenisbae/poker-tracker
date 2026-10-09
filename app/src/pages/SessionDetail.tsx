@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import type { Player } from '../types';
+import type { NameRedirect } from '../api';
 import { PlayerRow } from '../components/PlayerRow';
 import { CashOutModal } from '../components/CashOutModal';
 import { BuyInsModal } from '../components/BuyInsModal';
@@ -19,6 +20,14 @@ export function SessionDetail() {
   const { getSession, endSession, setSessionRake, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
 
   const session = getSession(id || '');
+
+  // Names the server added as someone else because of a merge — from the
+  // starting roster (handed over by New Session) or from Add Player. Shown so
+  // a wrong merge is caught at the table rather than weeks later.
+  const location = useLocation();
+  const [redirects, setRedirects] = useState<NameRedirect[]>(
+    () => (location.state as { renamed?: NameRedirect[] } | null)?.renamed ?? []
+  );
 
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
@@ -93,12 +102,13 @@ export function SessionDetail() {
     setActionError(null);
 
     try {
-      await addPlayerToSession(session.id, {
+      const updated = await addPlayerToSession(session.id, {
         name: newPlayerName.trim(),
         buyIns: [],
         cashOut: null,
         paymentMethod: 'cash',
       });
+      if (updated.renamed?.length) setRedirects(updated.renamed);
 
       setNewPlayerName('');
       setShowAddPlayer(false);
@@ -326,6 +336,31 @@ export function SessionDetail() {
         {(error || actionError) && (
           <div className="card border-accent-negative mb-4">
             <p className="text-accent-negative font-medium">⚠️ {error || actionError}</p>
+          </div>
+        )}
+
+        {/* A typed name added as someone else. Usually right — Dre is Jeremy —
+            but a wrong merge would otherwise relabel a player silently. */}
+        {redirects.length > 0 && (
+          <div role="status" className="card border-accent-amber mb-4 flex items-start gap-3">
+            <div className="flex-1 text-sm text-text-primary">
+              {redirects.map((r) => (
+                <p key={r.from}>
+                  “{r.from}” was added as <span className="font-semibold">{r.to}</span>.
+                </p>
+              ))}
+              <p className="text-text-secondary mt-1">
+                {redirects.length === 1 ? 'The two names were' : 'Those names were'} merged on the aliases page.
+                If that isn't the same person, the merge was a mistake and needs undoing.
+              </p>
+            </div>
+            <button
+              onClick={() => setRedirects([])}
+              aria-label="Dismiss"
+              className="p-1 -m-1 rounded-full text-text-tertiary hover:text-text-primary"
+            >
+              ✕
+            </button>
           </div>
         )}
 

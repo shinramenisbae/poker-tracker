@@ -58,7 +58,8 @@ export function NewSession() {
       };
 
       const newSession = await addSession(session);
-      navigate(`/session/${newSession.id}`);
+      // Any name the server moved onto someone else is shown on the session.
+      navigate(`/session/${newSession.id}`, { state: { renamed: newSession.renamed ?? [] } });
     } catch {
       setError('Failed to create session. Please try again.');
       setIsCreating(false);
