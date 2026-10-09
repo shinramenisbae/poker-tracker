@@ -7,7 +7,7 @@ const { endSession } = require('./end-session');
 const { canChangeBanker } = require('./change-banker');
 const { pickBankPlayer } = require('./bank-player');
 const { balancesFrom, checkEntry, cents } = require('./rake-ledger');
-const { resolveMergedName, currentPlayerName, movePayments } = require('./merged-names');
+const { resolveMergedName, redirectOf, currentPlayerName, movePayments } = require('./merged-names');
 const { allAsync } = require('./db-async');
 
 const app = express();
@@ -249,11 +249,18 @@ app.post('/api/sessions', async (req, res) => {
   const { date, notes, gameType, status, discordThreadId } = req.body;
   // A name merged away on the aliases page lands on the player it was merged
   // into, not on a stranger of the same name — see merged-names.js.
+  // The response says which names were moved, so the table can catch a wrong merge.
   let players = req.body.players;
+  const renamed = [];
   if (Array.isArray(players) && players.length > 0) {
     try {
       const removed = await allAsync(db, 'SELECT name, mergedInto FROM removed_canonicals');
-      players = players.map((player) => ({ ...player, name: resolveMergedName(player.name, removed) }));
+      players = players.map((player) => {
+        const name = resolveMergedName(player.name, removed);
+        const moved = redirectOf(player.name, name);
+        if (moved) renamed.push(moved);
+        return { ...player, name };
+      });
     } catch (err) {
       return res.status(500).json({ error: err.message });
     }
@@ -314,7 +321,7 @@ app.post('/api/sessions', async (req, res) => {
                 if (err) {
                   return res.status(500).json({ error: err.message });
                 }
-                res.status(201).json({ ...session, players: playerResults });
+                res.status(201).json({ ...session, players: playerResults, renamed });
               });
             }
           }
@@ -326,7 +333,7 @@ app.post('/api/sessions', async (req, res) => {
         if (err) {
           return res.status(500).json({ error: err.message });
         }
-        res.status(201).json({ ...session, players: [] });
+        res.status(201).json({ ...session, players: [], renamed });
       });
     }
   });
@@ -529,6 +536,7 @@ app.post('/api/sessions/:id/players', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
+  const renamed = [redirectOf(req.body.name, name)].filter(Boolean);
 
   db.get('SELECT * FROM sessions WHERE id = ?', [sessionId], (err, session) => {
     if (err) {
@@ -563,7 +571,7 @@ app.post('/api/sessions/:id/players', async (req, res) => {
           }
 
           if (!players || players.length === 0) {
-            return res.status(201).json({ ...session, players: [] });
+            return res.status(201).json({ ...session, players: [], renamed });
           }
 
           let completedPlayers = 0;
@@ -584,7 +592,7 @@ app.post('/api/sessions/:id/players', async (req, res) => {
               completedPlayers++;
 
               if (completedPlayers === players.length) {
-                res.status(201).json({ ...session, players: playersWithBuyIns });
+                res.status(201).json({ ...session, players: playersWithBuyIns, renamed });
               }
             });
           });

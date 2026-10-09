@@ -5,7 +5,7 @@ process.env.POKER_DB = ':memory:';
 process.env.SEED_ALIASES = '0';
 const db = require('./database');
 const { allAsync, runAsync } = require('./db-async');
-const { resolveMergedName, currentPlayerName, movePayments } = require('./merged-names');
+const { resolveMergedName, currentPlayerName, movePayments, redirectOf } = require('./merged-names');
 
 after(() => db.close());
 
@@ -102,4 +102,29 @@ test('movePayments: other players\' marks are untouched', async () => {
   await pay(s, 'Simon', '2026-07-21T00:00:00.000Z', 'Simon');
   await movePayments(db, 'Dre', 'Jeremy');
   assert.deepEqual((await marks(s)).map((m) => m.playerName), ['Jeremy', 'Simon']);
+});
+
+// Telling the table when a typed name was redirected. On 9 Oct 2026 "Daniel H"
+// was quietly entered as "Daniel" because of a merge that turned out wrong;
+// saying so out loud is how the next wrong merge gets caught.
+test('redirectOf: a merged-away name is reported as moved', () => {
+  assert.deepEqual(redirectOf('Dre', 'Jeremy'), { from: 'Dre', to: 'Jeremy' });
+});
+
+test('redirectOf: the name as typed is what is reported', () => {
+  assert.deepEqual(redirectOf('  dre ', 'Jeremy'), { from: 'dre', to: 'Jeremy' });
+});
+
+test('redirectOf: a name that stayed put says nothing', () => {
+  assert.equal(redirectOf('Simon', 'Simon'), null);
+});
+
+test('redirectOf: fixing only the case or spacing is not worth a notice', () => {
+  assert.equal(redirectOf('jeremy', 'Jeremy'), null);
+  assert.equal(redirectOf('Daniel  Y', 'Daniel Y'), null);
+});
+
+test('redirectOf: nothing typed, nothing to say', () => {
+  assert.equal(redirectOf(undefined, undefined), null);
+  assert.equal(redirectOf('', ''), null);
 });

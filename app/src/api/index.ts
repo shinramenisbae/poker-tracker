@@ -99,7 +99,15 @@ export async function fetchSessionPayments(sessionId: string): Promise<SessionPa
   return handleResponse<SessionPaymentsResponse>(response);
 }
 
-export async function createSession(data: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>): Promise<Session> {
+// A typed name that was merged away on the aliases page is added as the player
+// it was merged into. The server says when that happened, so the page can tell
+// the table — a wrong merge otherwise relabels someone without anyone noticing.
+export interface NameRedirect {
+  from: string;
+  to: string;
+}
+
+export async function createSession(data: Omit<Session, 'id' | 'createdAt' | 'updatedAt'>): Promise<Session & { renamed?: NameRedirect[] }> {
   const response = await fetch(`${API_BASE_URL}/sessions`, {
     method: 'POST',
     headers: {
@@ -107,7 +115,7 @@ export async function createSession(data: Omit<Session, 'id' | 'createdAt' | 'up
     },
     body: JSON.stringify(data),
   });
-  return handleResponse<Session>(response);
+  return handleResponse<Session & { renamed?: NameRedirect[] }>(response);
 }
 
 export async function updateSession(id: string, data: Partial<Session>): Promise<Session> {
@@ -132,7 +140,7 @@ export async function deleteSession(id: string): Promise<void> {
 }
 
 // Player API
-export async function addPlayer(sessionId: string, player: Omit<Player, 'id'>): Promise<Session> {
+export async function addPlayer(sessionId: string, player: Omit<Player, 'id'>): Promise<Session & { renamed?: NameRedirect[] }> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/players`, {
     method: 'POST',
     headers: {
@@ -140,7 +148,7 @@ export async function addPlayer(sessionId: string, player: Omit<Player, 'id'>): 
     },
     body: JSON.stringify(player),
   });
-  return handleResponse<Session>(response);
+  return handleResponse<Session & { renamed?: NameRedirect[] }>(response);
 }
 
 // Buy-in API
