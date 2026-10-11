@@ -36,9 +36,9 @@ const bodyOf = (fetchMock: ReturnType<typeof stubApi>, url: string) => {
   return call ? JSON.parse(String(call[1].body)) : undefined;
 };
 
-function renderLive() {
+function renderLive(state?: unknown) {
   return render(
-    <MemoryRouter initialEntries={['/session/s1']}>
+    <MemoryRouter initialEntries={[{ pathname: '/session/s1', state }]}>
       <Routes>
         <Route path="/session/:id" element={<SessionDetail />} />
         <Route path="/session/:id/results" element={<p>Results page</p>} />
@@ -136,5 +136,64 @@ describe('SessionDetail: rake counted with the stacks', () => {
 
     await waitFor(() => expect(screen.getByText('✓ The pot balances.')).toBeInTheDocument());
     expect(bodyOf(fetchMock, '/api/sessions/s1/rake')).toEqual({ amount: 35, holder: null });
+  });
+});
+
+// A typed name moved onto someone else is said out loud: on 9 Oct 2026 "Daniel
+// H" was quietly entered as "Daniel" because of a wrong merge, and nobody at
+// the table was told.
+describe('SessionDetail: saying when a typed name was redirected', () => {
+  it('adding a merged-away name says who it was added as', async () => {
+    stubApi({
+      '/api/sessions/s1': session(),
+      '/api/sessions/s1/players': {
+        ...session({ players: [...session().players, player('s1-jeremy2', 'Jeremy', 0, null)] }),
+        renamed: [{ from: 'Dre', to: 'Jeremy' }],
+      },
+    });
+    const user = userEvent.setup();
+
+    renderLive();
+    await user.click(await screen.findByRole('button', { name: '+ Add Player' }));
+    await user.type(screen.getByPlaceholderText('Player name'), 'Dre');
+    await user.click(screen.getByRole('button', { name: 'Add Player' }));
+
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('“Dre” was added as Jeremy');
+    expect(notice).toHaveTextContent(/merged on the aliases page/);
+  });
+
+  it('a name added as typed says nothing', async () => {
+    stubApi({
+      '/api/sessions/s1': session(),
+      '/api/sessions/s1/players': { ...session(), renamed: [] },
+    });
+    const user = userEvent.setup();
+
+    renderLive();
+    await user.click(await screen.findByRole('button', { name: '+ Add Player' }));
+    await user.type(screen.getByPlaceholderText('Player name'), 'Simon');
+    await user.click(screen.getByRole('button', { name: 'Add Player' }));
+
+    await waitFor(() => expect(screen.queryByPlaceholderText('Player name')).not.toBeInTheDocument());
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('names moved in the starting roster are reported when the session opens', async () => {
+    stubApi({ '/api/sessions/s1': session() });
+
+    renderLive({ renamed: [{ from: 'Daniel H', to: 'Daniel' }] });
+
+    expect(await screen.findByRole('status')).toHaveTextContent('“Daniel H” was added as Daniel');
+  });
+
+  it('the notice can be dismissed', async () => {
+    stubApi({ '/api/sessions/s1': session() });
+    const user = userEvent.setup();
+
+    renderLive({ renamed: [{ from: 'Dre', to: 'Jeremy' }] });
+    await user.click(await screen.findByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
