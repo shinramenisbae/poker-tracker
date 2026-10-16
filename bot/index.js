@@ -41,6 +41,7 @@ import {
 import { unpaidDebtors } from './unpaid.js';
 import { msUntilNextLocalHour } from './schedule.js';
 import { computeStreakTransitions, isLatestCompletedSession } from './streaks.js';
+import { splitBigHeaters, heaterBanner } from './heater-banner.js';
 import { resolveSettings, isConfigured, envDefaultsFor } from './settings.js';
 import { buildRegistry, trackerFor } from './registry.js';
 import { respond, unarchiveIfArchived, sendToThread } from './respond.js';
@@ -821,16 +822,36 @@ function streakLine(t) {
 
 // Compute streak transitions for this session and render the message section.
 // Failures degrade to "no section" — a streaks hiccup must never block results.
+//
+// A run of six or more wins gets a banner at the top of the post instead of its
+// streak-watch line (see heater-banner.js), pinging the player when their
+// Discord account is linked.
 async function buildStreakSection(session) {
   try {
     const sessions = await trackerGet('/sessions');
     const transitions = computeStreakTransitions(sessions, session.id);
-    const lines = transitions.map(streakLine).filter(Boolean);
+    const { big, rest } = splitBigHeaters(transitions);
+    const lines = rest.map(streakLine).filter(Boolean);
     const text = lines.length ? `\n📈 **Streak watch**\n${lines.join('\n')}\n` : '';
-    return { text, transitions, sessions };
+
+    let banner = '';
+    const mentionUserIds = [];
+    if (big.length > 0) {
+      const links = await getDiscordLinks();
+      const nameToUser = {};
+      for (const [uid, name] of Object.entries(links)) {
+        if (!(name in nameToUser)) nameToUser[name] = uid;
+      }
+      banner = big.map((t) => {
+        const uid = nameToUser[t.playerName] || null;
+        if (uid) mentionUserIds.push(uid);
+        return heaterBanner(t, uid);
+      }).join('\n\n');
+    }
+    return { text, banner, mentionUserIds, transitions, sessions };
   } catch (err) {
     console.error('Streak computation failed:', err.message);
-    return { text: '', transitions: [], sessions: null };
+    return { text: '', banner: '', mentionUserIds: [], transitions: [], sessions: null };
   }
 }
 
@@ -878,7 +899,8 @@ async function postResultsMessage(thread, session) {
   const results = computePerPlayerResults(session);
   const bankAccounts = await fetchBankAccounts();
   const streaks = await buildStreakSection(session);
-  const body = formatResultsMessage(session, results, bankAccounts) + streaks.text;
+  const banner = streaks.banner ? `${streaks.banner}\n\n` : '';
+  const body = banner + formatResultsMessage(session, results, bankAccounts) + streaks.text;
   // A help command nobody thinks to run is worth nothing, so point at it from
   // the one message everyone reads. Only when it fits: Discord hard-caps a
   // message at 2000 characters and a big session already runs close, so the
@@ -892,10 +914,10 @@ async function postResultsMessage(thread, session) {
   if (settings().pokerRoleId) {
     await thread.send({
       content: `<@&${settings().pokerRoleId}>\n${text}`,
-      allowedMentions: { roles: [settings().pokerRoleId] },
+      allowedMentions: { roles: [settings().pokerRoleId], users: streaks.mentionUserIds },
     });
   } else {
-    await thread.send({ content: text, allowedMentions: { parse: [] } });
+    await thread.send({ content: text, allowedMentions: { parse: [], users: streaks.mentionUserIds } });
   }
 
   await applyStreakRoles(thread, streaks.transitions, streaks.sessions, session.id);
