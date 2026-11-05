@@ -67,6 +67,15 @@ export async function changeBanker(sessionId: string, playerId: string): Promise
   return handleResponse<Session & { discord?: DiscordOutcome }>(response);
 }
 
+export async function saveCashPayouts(sessionId: string, amounts: Record<string, number>): Promise<Session & { discord?: DiscordOutcome }> {
+  const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/cash-payouts`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amounts }),
+  });
+  return handleResponse<Session & { discord?: DiscordOutcome }>(response);
+}
+
 export interface RakeHolder {
   name: string;
   balance: number;
@@ -162,7 +171,7 @@ export async function addBuyIn(
   sessionId: string,
   playerId: string,
   amount: number,
-  method: 'cash' | 'bank' = 'cash',
+  method: BuyInMethod = 'cash',
   rebuy: RebuyOptions = {}
 ): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/players/${playerId}/buyins`, {

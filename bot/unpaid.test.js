@@ -9,8 +9,8 @@ function session() {
     bankPlayerId: null,
     players: [
       { id: 'luke', name: 'Luke', buyIns: [{ amount: 100, method: 'cash' }], cashOut: { amount: 570.5 } },
-      { id: 'simon', name: 'Simon', buyIns: [{ amount: 100, method: 'cash' }, { amount: 108, method: 'bank' }], cashOut: { amount: 0 } },
-      { id: 'george', name: 'George', buyIns: [{ amount: 200, method: 'bank' }], cashOut: { amount: 0 } },
+      { id: 'simon', name: 'Simon', buyIns: [{ amount: 100, method: 'cash' }, { amount: 108, method: 'credit' }], cashOut: { amount: 0 } },
+      { id: 'george', name: 'George', buyIns: [{ amount: 200, method: 'credit' }], cashOut: { amount: 0 } },
       { id: 'cashonly', name: 'CashOnly', buyIns: [{ amount: 50, method: 'cash' }], cashOut: { amount: 0 } },
     ],
   };

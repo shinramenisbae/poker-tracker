@@ -6,6 +6,7 @@ import {
   endSession as apiEndSession,
   changeBanker as apiChangeBanker,
   setSessionRake as apiSetSessionRake,
+  saveCashPayouts as apiSaveCashPayouts,
   createSession as apiCreateSession,
   updateSession as apiUpdateSession,
   deleteSession as apiDeleteSession,
@@ -184,6 +185,14 @@ export function useSessions(sessionId?: string) {
     }
   }, []);
 
+  // Record who the banker pays in cash. Discord follows server-side; its outcome
+  // rides along on the response rather than failing the save.
+  const saveCashPayouts = useCallback(async (id: string, amounts: Record<string, number>) => {
+    const updated = await apiSaveCashPayouts(id, amounts);
+    setSessions((prev) => prev.map((session) => (session.id === id ? updated : session)));
+    return updated;
+  }, []);
+
   // Correct a night's rake, or move who holds it.
   const setSessionRake = useCallback(async (id: string, amount: number, holder: string | null) => {
     setIsLoading(true);
@@ -249,7 +258,7 @@ export function useSessions(sessionId?: string) {
     sessionId: string,
     playerId: string,
     amount: number,
-    method: 'cash' | 'bank' = 'cash',
+    method: BuyInMethod = 'cash',
     rebuy: { isRebuy?: boolean; rebuyType?: 'top-up' | 'stacked'; stackedHand?: string } = {}
   ) => {
     setIsLoading(true);
@@ -358,6 +367,7 @@ export function useSessions(sessionId?: string) {
     endSession,
     changeBanker,
     setSessionRake,
+    saveCashPayouts,
     deleteSession,
     getSession,
     addPlayerToSession,

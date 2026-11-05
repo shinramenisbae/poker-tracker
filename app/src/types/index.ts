@@ -22,6 +22,10 @@ export interface Session {
   creditLimit: number;
   /** Who anything over the limit is paid to straight away (Nick or Stephen). */
   creditCollector: string | null;
+  /** Winners are paid cash in $50s, with the difference settled by transfer.
+   *  Unset on older sessions, which keep their proportional split until a cash
+   *  amount is saved for them. */
+  cashInFifties?: number;
   /** Only on the response to adding a buy-in: set when part of it went over
    *  the limit and has to be paid up front. */
   creditSplit?: CreditSplit | null;
@@ -29,17 +33,18 @@ export interface Session {
 
 export interface CreditSplit {
   /** Added to what the player owes the banker. */
-  owed: number;
-  /** Over the limit: paid to the collector now. */
-  prepaid: number;
+  credit: number;
+  /** Over the limit: transferred to the collector now. */
+  bank: number;
   collector: string | null;
   limit: number;
   newPlayer: boolean;
 }
 
-/** 'cash' is paid on the table, 'bank' is owed to the banker, 'prepaid' was
- *  paid to the session's credit collector because it went over the limit. */
-export type BuyInMethod = 'cash' | 'bank' | 'prepaid';
+/** 'cash' goes to the banker, or the table until there is one. 'bank' is
+ *  transferred to the session's collector up front. 'credit' is owed to the
+ *  banker after the game, up to the credit limit. */
+export type BuyInMethod = 'cash' | 'bank' | 'credit';
 
 export interface Player {
   id: string;
@@ -47,6 +52,8 @@ export interface Player {
   buyIns: BuyIn[];
   cashOut: CashOut | null;
   paymentMethod: 'cash' | 'bank';
+  /** Cash the banker hands this player, in $50s. null until someone records it. */
+  cashPaid?: number | null;
 }
 
 export interface BuyIn {
@@ -87,13 +94,16 @@ export interface Settlement {
   playerName: string;
   profitLoss: number;
   cashBuyIn: number;
+  /** Owed to the banker after the game. */
+  creditBuyIn: number;
+  /** Transferred to the collector up front; the player owes nothing for it. */
   bankBuyIn: number;
-  /** Paid to the credit collector up front; the player owes nothing for it. */
-  prepaidBuyIn: number;
   netWithBank: number;
   cashReceived: number;
   bankReceived: number;
   bankOwed: number;
+  /** Cash rounded up past what they were owed: they transfer the change back. */
+  changeOwed: number;
 }
 
 export interface SettlementSummary {
@@ -106,11 +116,15 @@ export interface SettlementSummary {
   bankTransfersIn: number;
   /** null when no rake was taken. */
   rake: RakeSummary | null;
-  /** null when nobody paid over their credit limit up front. */
-  prepaid: PrepaidSummary | null;
+  /** null when nobody bought in by bank. */
+  collected: CollectedSummary | null;
+  /** Whether the cash amounts were recorded, suggested, or the older split. */
+  cashMode: 'saved' | 'suggested' | 'proportional';
+  /** Cash collected less cash handed out; negative when more went out. */
+  cashLeft: number;
 }
 
-export interface PrepaidSummary {
+export interface CollectedSummary {
   amount: number;
   /** null when the session never named one. */
   collectorName: string | null;

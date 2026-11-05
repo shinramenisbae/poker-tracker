@@ -201,7 +201,7 @@ describe('SessionDetail: saying when a typed name was redirected', () => {
 describe('SessionDetail: credit limit', () => {
   const fresh = (id: string, name: string, buyIns: unknown[] = []) => ({ ...player(id, name, 0, null), buyIns });
   const bank = (id: string, amount: number) =>
-    ({ id, playerId: 'x', amount, timestamp: '2026-09-28T05:00:00.000Z', isRebuy: 0, method: 'bank' });
+    ({ id, playerId: 'x', amount, timestamp: '2026-09-28T05:00:00.000Z', isRebuy: 0, method: 'credit' });
   const live = (over: Record<string, unknown> = {}) => session({
     creditLimit: 500, creditCollector: 'Stephen',
     players: [fresh('s1-leo', 'Leo', [bank('b1', 400)]), fresh('s1-newbie', 'Newbie')],
@@ -227,7 +227,7 @@ describe('SessionDetail: credit limit', () => {
     renderLive();
 
     expect(await screen.findByLabelText('Each player may owe')).toHaveValue(500);
-    expect(screen.getByLabelText('Over the limit, pay')).toHaveValue('Stephen');
+    expect(screen.getByLabelText('Bank transfers go to')).toHaveValue('Stephen');
     await waitFor(() => expect(screen.getAllByTestId('credit-used')).toHaveLength(2));
     const [leo, newbie] = screen.getAllByTestId('credit-used');
     expect(leo).toHaveTextContent('Owes $400.00 of $500.00 credit');
@@ -252,14 +252,23 @@ describe('SessionDetail: credit limit', () => {
     const limit = await screen.findByLabelText('Each player may owe');
     await user.clear(limit);
     await user.type(limit, '300');
-    await user.clear(screen.getByLabelText('Over the limit, pay'));
-    await user.type(screen.getByLabelText('Over the limit, pay'), 'Nick');
+    await user.clear(screen.getByLabelText('Bank transfers go to'));
+    await user.type(screen.getByLabelText('Bank transfers go to'), 'Nick');
     await user.click(screen.getByRole('button', { name: 'Save credit limit' }));
 
     await waitFor(() => {
       const put = fetchMock.mock.calls.find(([u, init]) => u === '/api/sessions/s1' && (init as RequestInit | undefined)?.method === 'PUT');
       expect(put && JSON.parse(String((put[1] as RequestInit).body))).toEqual({ creditLimit: 300, creditCollector: 'Nick' });
     });
+  });
+
+  it('asks who is collecting when nobody is set', async () => {
+    const current = live({ creditCollector: null });
+    stubApi({ '/api/sessions/s1': current, ...history(current) });
+
+    renderLive();
+
+    expect(await screen.findByTestId('collector-missing')).toBeInTheDocument();
   });
 
   it('online sessions have no credit limit', async () => {
@@ -278,7 +287,7 @@ describe('SessionDetail: credit limit', () => {
       ...history(current),
       '/api/sessions/s1/players/s1-newbie/buyins': {
         ...current,
-        creditSplit: { owed: 0, prepaid: 100, collector: 'Stephen', limit: 0, newPlayer: true },
+        creditSplit: { credit: 0, bank: 100, collector: 'Stephen', limit: 0, newPlayer: true },
       },
     });
     const user = userEvent.setup();
@@ -286,10 +295,10 @@ describe('SessionDetail: credit limit', () => {
     renderLive();
     await screen.findByText('Newbie');
     const newbieRow = screen.getByText('Newbie').closest('.rounded-xl') as HTMLElement;
-    await user.click(within(newbieRow).getByRole('button', { name: 'Bank' }));
+    await user.click(within(newbieRow).getByRole('button', { name: 'Credit' }));
     await user.click(within(newbieRow).getByRole('button', { name: '+$100' }));
 
     expect(await screen.findByTestId('credit-notice')).toHaveTextContent(
-      'Newbie is new, so gets no credit — pay $100.00 to Stephen now (instant transfer or cash).');
+      'Newbie is new, so gets no credit — transfer $100.00 to Stephen now.');
   });
 });

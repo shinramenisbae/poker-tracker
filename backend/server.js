@@ -5,7 +5,8 @@ const path = require('path');
 const db = require('./database');
 const { endSession } = require('./end-session');
 const { canChangeBanker } = require('./change-banker');
-const { addBuyIn, DEFAULT_CREDIT_LIMIT } = require('./credit-limit');
+const { addBuyIn, DEFAULT_CREDIT_LIMIT, BUY_IN_METHODS } = require('./credit-limit');
+const { saveCashPayouts } = require('./cash-payouts');
 const { pickBankPlayer } = require('./bank-player');
 const { balancesFrom, checkEntry, cents } = require('./rake-ledger');
 const { resolveMergedName, redirectOf, currentPlayerName, movePayments } = require('./merged-names');
@@ -280,8 +281,8 @@ app.post('/api/sessions', async (req, res) => {
   const now = new Date().toISOString();
 
   const stmt = db.prepare(`
-    INSERT INTO sessions (id, date, status, notes, gameType, discordThreadId, createdAt, updatedAt, creditLimit, creditCollector)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, date, status, notes, gameType, discordThreadId, createdAt, updatedAt, creditLimit, creditCollector, cashInFifties)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
   `);
 
   stmt.run(id, date || now.split('T')[0], status || 'active', notes || '', gameType || 'in-person', discordThreadId || null, now, now, DEFAULT_CREDIT_LIMIT, creditCollector, function(err) {
@@ -522,6 +523,27 @@ app.put('/api/sessions/:id/banker', (req, res) => {
   });
 });
 
+// PUT /api/sessions/:id/cash-payouts — who the banker paid in cash, and how much.
+//
+// The tracker is the record; the results post in Discord is edited to follow,
+// quietly, and its outcome is reported rather than failing the save.
+app.put('/api/sessions/:id/cash-payouts', async (req, res) => {
+  const sessionId = req.params.id;
+  try {
+    await saveCashPayouts(db, sessionId, (req.body || {}).amounts);
+  } catch (err) {
+    const status = { NOT_FOUND: 404, ACTIVE: 409, BAD_AMOUNT: 400, UNKNOWN_PLAYER: 400 }[err.code] || 500;
+    return res.status(status).json({ error: err.message, code: err.code });
+  }
+  readSession(sessionId, async (err, session) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const discord = session.discordThreadId
+      ? await callBot(`/results-changed/${encodeURIComponent(sessionId)}`)
+      : { ok: true, skipped: 'not announced' };
+    res.json({ ...session, discord });
+  });
+});
+
 // DELETE /api/sessions/:id - Delete session
 app.delete('/api/sessions/:id', (req, res) => {
   const sessionId = req.params.id;
@@ -620,9 +642,8 @@ app.post('/api/sessions/:id/players', async (req, res) => {
 });
 
 // POST /api/sessions/:id/players/:playerId/buyins - Add buy-in
-// A bank buy-in over the player's credit limit is split, the part over the
-// limit recorded as paid up front to the session's collector — see
-// credit-limit.js. creditSplit on the response says so, for the page to tell
+// A credit buy-in over the player's limit is split, the part over the limit
+// recorded as a bank transfer to the session's collector — see credit-limit.js. creditSplit on the response says so, for the page to tell
 // the table who has to pay whom right now.
 app.post('/api/sessions/:id/players/:playerId/buyins', async (req, res) => {
   const sessionId = req.params.id;
@@ -634,6 +655,7 @@ app.post('/api/sessions/:id/players/:playerId/buyins', async (req, res) => {
     ({ creditSplit } = await addBuyIn(db, { sessionId, playerId, amount, method, isRebuy, rebuyType, stackedHand }));
   } catch (err) {
     if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
+    if (err.code === 'BAD_METHOD') return res.status(400).json({ error: err.message });
     return res.status(500).json({ error: err.message });
   }
 
@@ -650,6 +672,9 @@ app.put('/api/sessions/:id/players/:playerId/buyins/:buyInId', (req, res) => {
   const playerId = req.params.playerId;
   const buyInId = req.params.buyInId;
   const { amount, method, rebuyType, stackedHand } = req.body;
+  if (method !== undefined && !BUY_IN_METHODS.includes(method)) {
+    return res.status(400).json({ error: `method must be one of ${BUY_IN_METHODS.join(', ')}` });
+  }
 
   db.get('SELECT * FROM buyIns WHERE id = ? AND playerId = ?', [buyInId, playerId], (err, buyIn) => {
     if (err) {

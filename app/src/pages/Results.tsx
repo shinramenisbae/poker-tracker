@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
 import { SettlementView } from '../components/SettlementView';
+import { CashPayouts } from '../components/CashPayouts';
 import {
   getSessionTotals,
   getSettlementSummary,
@@ -18,7 +19,7 @@ import {
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, isLoading, refreshSessions, changeBanker, setSessionRake } = useSessions(id);
+  const { getSession, isLoading, refreshSessions, changeBanker, setSessionRake, saveCashPayouts } = useSessions(id);
   const [paidCount, setPaidCount] = useState<number | null>(null);
   const [showBankerPicker, setShowBankerPicker] = useState(false);
   const [bankerError, setBankerError] = useState<string | null>(null);
@@ -313,6 +314,11 @@ export function Results() {
               <p className="text-xs text-accent-negative mt-2">{bankerError}</p>
             )}
           </div>
+        )}
+
+        {/* Who the banker pays in cash: only a person in the room knows. */}
+        {summary && session.status === 'completed' && session.gameType !== 'online' && (
+          <CashPayouts summary={summary} onSave={(amounts) => saveCashPayouts(session.id, amounts)} />
         )}
 
         {/* Settlement View */}

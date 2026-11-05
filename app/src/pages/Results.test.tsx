@@ -79,7 +79,7 @@ describe('Results', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /change banker/i })).toBeEnabled());
 
     await userEvent.click(screen.getByRole('button', { name: /change banker/i }));
-    await userEvent.click(await screen.findByRole('button', { name: /Stephen/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /^Stephen/ }));
 
     await waitFor(() => {
       const call = fetchMock.mock.calls.find(([url]) => url === '/api/sessions/s1/banker');

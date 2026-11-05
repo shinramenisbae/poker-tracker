@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import type { Player } from '../types';
+import type { BuyInMethod, Player } from '../types';
 import { getTotalBuyIn, getProfitLoss, formatCurrency } from '../utils/calculations';
 
 interface PlayerRowProps {
   player: Player;
-  onAddBuyIn: (amount: number, method: 'cash' | 'bank') => void;
+  onAddBuyIn: (amount: number, method: BuyInMethod) => void;
   onCashOut: () => void;
   onEditBuyIns?: () => void;
-  showCustomBuyIn?: (method: 'cash' | 'bank') => void;
+  showCustomBuyIn?: (method: BuyInMethod) => void;
   disabled?: boolean;
   /** Live in-person sessions only: how much of the credit limit is used. */
   credit?: { owed: number; limit: number; newPlayer: boolean; collector: string | null };
@@ -25,7 +25,7 @@ export function PlayerRow({
   credit,
   oldDebt,
 }: PlayerRowProps) {
-  const [buyInMethod, setBuyInMethod] = useState<'cash' | 'bank'>('cash');
+  const [buyInMethod, setBuyInMethod] = useState<BuyInMethod>('cash');
   const totalBuyIn = getTotalBuyIn(player);
   const profitLoss = getProfitLoss(player);
   const isCashedOut = player.cashOut !== null;
@@ -37,14 +37,14 @@ export function PlayerRow({
   const bankTotal = player.buyIns
     .filter((b) => b.method === 'bank')
     .reduce((sum, b) => sum + b.amount, 0);
-  const prepaidTotal = player.buyIns
-    .filter((b) => b.method === 'prepaid')
+  const creditTotal = player.buyIns
+    .filter((b) => b.method === 'credit')
     .reduce((sum, b) => sum + b.amount, 0);
   const collectorName = credit?.collector || 'the collector';
   const breakdown = [
     cashTotal > 0 ? `${formatCurrency(cashTotal)} cash` : '',
     bankTotal > 0 ? `${formatCurrency(bankTotal)} bank` : '',
-    prepaidTotal > 0 ? `${formatCurrency(prepaidTotal)} paid to ${collectorName}` : '',
+    creditTotal > 0 ? `${formatCurrency(creditTotal)} credit` : '',
   ].filter(Boolean).join(' + ');
 
   return (
@@ -82,7 +82,7 @@ export function PlayerRow({
             {credit && (
               <p className="text-xs text-text-tertiary" data-testid="credit-used">
                 {credit.newPlayer
-                  ? `New player — no credit, bank buy-ins are paid to ${collectorName} up front`
+                  ? `New player — no credit, anything on credit becomes a bank transfer to ${collectorName}`
                   : `Owes ${formatCurrency(credit.owed)} of ${formatCurrency(credit.limit)} credit`}
               </p>
             )}
@@ -113,7 +113,7 @@ export function PlayerRow({
 
       {!isCashedOut ? (
         <div className="space-y-2 mt-3">
-          {/* Cash/Bank toggle */}
+          {/* Cash/Bank/Credit toggle */}
           <div className="flex gap-1 bg-bg-tertiary rounded-lg p-0.5">
             <button
               onClick={() => setBuyInMethod('cash')}
@@ -136,6 +136,17 @@ export function PlayerRow({
               }`}
             >
               Bank
+            </button>
+            <button
+              onClick={() => setBuyInMethod('credit')}
+              disabled={disabled}
+              className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                buyInMethod === 'credit'
+                  ? 'bg-accent-positive text-white shadow-sm'
+                  : 'text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              Credit
             </button>
           </div>
           {/* Buy-in buttons */}

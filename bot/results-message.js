@@ -6,7 +6,7 @@
 //
 // Pure: no Discord, no network, so every line of the message is testable.
 
-import { calculateSettlements } from './settlement.js';
+import { calculateSettlements, cashMode } from './settlement.js';
 
 function computePerPlayerResults(session) {
   // Returns [{id, name, profit}] sorted by profit desc
@@ -27,6 +27,17 @@ function formatMoney(n) {
 /** Plain dollar amount (no +/- sign), for cash/bank annotations. */
 function formatCash(n) {
   return `$${Math.abs(Number(n) || 0).toFixed(2)}`;
+}
+
+/** How the banker pays a player, once someone has recorded the cash. */
+function payoutNote(s) {
+  const parts = [];
+  if (s.cashReceived > 0.005) parts.push(`${formatCash(s.cashReceived)} cash`);
+  if (s.bankReceived > 0.005) parts.push(`${formatCash(s.bankReceived)} by transfer`);
+  const gets = parts.length > 0 ? `gets ${parts.join(' + ')}` : '';
+  const back = s.changeOwed > 0.005 ? `transfers ${formatCash(s.changeOwed)} back` : '';
+  const note = [gets, back].filter(Boolean).join(', ');
+  return note ? `  _(${note})_` : '';
 }
 
 function formatResultsMessage(session, results, bankAccounts) {
@@ -50,6 +61,8 @@ function formatResultsMessage(session, results, bankAccounts) {
   // shows what's already covered on the table vs still owed via bank transfer.
   const settlements = calculateSettlements(session);
   const settleByName = new Map(settlements.map((s) => [s.playerName, s]));
+  const cashRecorded = bankPlayer ? cashMode(session, bankPlayer.id) === 'saved' : false;
+  const noteFor = (name) => (cashRecorded && settleByName.has(name) ? payoutNote(settleByName.get(name)) : '');
 
   let msg = `🎲 **Session results — ${session.date}**\n`;
   msg += session.gameType === 'online' ? '🌐 _Online session_\n\n' : '🪑 _In-person session_\n\n';
@@ -65,9 +78,9 @@ function formatResultsMessage(session, results, bankAccounts) {
         // Show bank info inline so the bank player can transfer winnings.
         const info = bankAccounts[w.name];
         if (info) {
-          msg += ` → ${info.displayName} \`${info.account}\`\n`;
+          msg += ` → ${info.displayName} \`${info.account}\`${noteFor(w.name)}\n`;
         } else {
-          msg += ` → _(no account on file)_\n`;
+          msg += ` → _(no account on file)_${noteFor(w.name)}\n`;
         }
       }
     }
@@ -82,7 +95,10 @@ function formatResultsMessage(session, results, bankAccounts) {
       // still owed. Only show when there's a meaningful cash component, so the
       // common all-bank loser stays a clean one-liner.
       const s = settleByName.get(l.name);
-      if (s && s.cashBuyIn > 0.005) {
+      if (s && cashRecorded && s.netWithBank > 0.005) {
+        // Lost on the night, but their own cash is coming back from the banker.
+        msg += noteFor(l.name);
+      } else if (s && s.cashBuyIn > 0.005) {
         const owed = s.bankOwed || 0;
         if (owed > 0.005) {
           msg += `  _(paid ${formatCash(s.cashBuyIn)} cash, owes ${formatCash(owed)} via bank)_`;
@@ -111,16 +127,16 @@ function formatResultsMessage(session, results, bankAccounts) {
       : `🧾 **Rake**: ${formatCash(rakeAmount)} → ${holder || 'nobody named'}\n\n`;
   }
 
-  // Buy-ins over the credit limit were paid on the night to the collector,
-  // who owes them to the bank — the rake's mirror image.
-  const prepaidAmount = Math.round((session.players || []).reduce((sum, p) => sum + (p.buyIns || [])
-    .filter((b) => b.method === 'prepaid')
+  // Bank buy-ins were transferred on the night to the collector, who owes them
+  // to the banker — the rake's mirror image.
+  const collectedAmount = Math.round((session.players || []).reduce((sum, p) => sum + (p.buyIns || [])
+    .filter((b) => b.method === 'bank')
     .reduce((s, b) => s + (Number(b.amount) || 0), 0), 0) * 100) / 100;
-  if (prepaidAmount > 0.005) {
+  if (collectedAmount > 0.005) {
     const collector = session.creditCollector || null;
     msg += bankPlayer && collector === bankPlayer.name
-      ? `💳 **Paid up front** (over the credit limit): ${formatCash(prepaidAmount)} — kept by ${collector}\n\n`
-      : `💳 **Paid up front** (over the credit limit): ${formatCash(prepaidAmount)} — ${collector || 'whoever collected it'} → ${bankPlayer ? bankPlayer.name : 'the bank player'}\n\n`;
+      ? `💳 **Bank buy-ins**: ${formatCash(collectedAmount)} — kept by ${collector}\n\n`
+      : `💳 **Bank buy-ins**: ${formatCash(collectedAmount)} — ${collector || 'whoever collected it'} → ${bankPlayer ? bankPlayer.name : 'the bank player'}\n\n`;
   }
 
   if (bankPlayer) {
@@ -136,6 +152,9 @@ function formatResultsMessage(session, results, bankAccounts) {
   return msg;
 }
 
+const RESULTS_HEADING = '🎲 **Session results —';
+const DISCORD_LIMIT = 2000;
+
 // Everything the original message carried after the results themselves.
 const STREAK_HEADING = '\n📈 **Streak watch**';
 const HELP_HINT = '\n\n\n_New here? Run `/help`._';
@@ -143,10 +162,11 @@ const HELP_HINT = '\n\n\n_New here? Run `/help`._';
 /**
  * Puts a corrected results body back into a message that is already posted.
  *
- * Two things are carried over rather than recomputed. The role mention, so the
- * edit doesn't re-ping a thread. And the streak lines, which were true the
- * night they were posted — recalculating them weeks later would rewrite
- * history, and might say nothing at all now that later sessions exist.
+ * Two things are carried over rather than recomputed. Whatever sits above the
+ * heading — the role mention, so the edit doesn't re-ping a thread, and any
+ * heater banner. And the streak lines. Both were true the night they were
+ * posted — recalculating them weeks later would rewrite history, and might say
+ * nothing at all now that later sessions exist.
  *
  * @param {string} original the message as posted
  * @param {string} rebuilt the new results body
@@ -155,8 +175,8 @@ const HELP_HINT = '\n\n\n_New here? Run `/help`._';
 function rebuildResultsMessage(original, rebuilt) {
   const text = String(original || '');
 
-  const mentionMatch = text.match(/^(<@&\d+>\n)/);
-  const mention = mentionMatch ? mentionMatch[1] : '';
+  const headingAt = text.indexOf(RESULTS_HEADING);
+  const above = headingAt > 0 ? text.slice(0, headingAt) : '';
 
   let tail = '';
   const streakAt = text.indexOf(STREAK_HEADING);
@@ -166,7 +186,13 @@ function rebuildResultsMessage(original, rebuilt) {
     tail = HELP_HINT;
   }
 
-  return `${mention}${rebuilt}${tail}`;
+  // Discord refuses anything over 2000 characters. The hint gives way first,
+  // the same as on the first post.
+  const edited = `${above}${rebuilt}${tail}`;
+  if (edited.length > DISCORD_LIMIT && tail.endsWith(HELP_HINT)) {
+    return edited.slice(0, -HELP_HINT.length);
+  }
+  return edited;
 }
 
 /**
@@ -175,7 +201,7 @@ function rebuildResultsMessage(original, rebuilt) {
  * @param {string} content
  */
 function isResultsPost(content) {
-  return (content || '').includes('🎲 **Session results —');
+  return (content || '').includes(RESULTS_HEADING);
 }
 
 export { computePerPlayerResults, formatMoney, formatCash, formatResultsMessage, rebuildResultsMessage, isResultsPost };

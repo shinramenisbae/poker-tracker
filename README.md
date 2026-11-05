@@ -7,7 +7,7 @@ Built with React + TypeScript on the frontend and Express.js + SQLite on the bac
 ## Features
 
 - **Session Management** — Create, track, and complete poker sessions with notes and date tracking
-- **Player Tracking** — Add players, record buy-ins (cash or bank), rebuys, and cash-outs per session
+- **Player Tracking** — Add players, record buy-ins (cash, bank or credit), rebuys, and cash-outs per session
 - **Quick Buy-In Buttons** — Predefined $50 and $100 buy-in buttons, plus custom amounts
 - **Automatic Settlement** — Calculates who owes whom at the end of a session, splitting across cash and bank transfers
 - **Bank Player System** — Identifies the biggest winner as the "bank player" who handles settlement distributions

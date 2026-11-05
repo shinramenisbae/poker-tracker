@@ -16,7 +16,7 @@ still owes at a configured time each day (default 10am NZ time).
     marks the player paid in the same step. Useful for the bank player to set
     up links on behalf of others. Re-linking is allowed; the reply notes the
     previous link.
-  - Only players who owe a **bank transfer** can be marked — pure cash-on-table
+  - Only players who owe a **bank transfer on credit** can be marked — pure cash-on-table
     losers have nothing to chase, mirroring the Results-page settlement.
   - The bot replies in-thread with who's marked and who's still outstanding.
 

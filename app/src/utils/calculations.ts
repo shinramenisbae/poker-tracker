@@ -4,12 +4,27 @@ export function getTotalBuyIn(player: Player): number {
   return player.buyIns.reduce((sum, buyIn) => sum + buyIn.amount, 0);
 }
 
-/** What a player owes the banker for tonight's buy-ins: the bank ones. Cash
- *  was paid on the table and 'prepaid' to the credit collector. */
+/** What a player owes the banker for tonight's buy-ins: the credit ones. Cash
+ *  went to the banker or the table, and bank to the collector. */
 export function getOwedBuyIn(player: Player): number {
   return player.buyIns
-    .filter((b) => b.method === 'bank')
+    .filter((b) => b.method === 'credit')
     .reduce((sum, b) => sum + b.amount, 0);
+}
+
+const roundCents = (n: number) => Math.round(n * 100) / 100;
+
+/** Suggested cash for someone the banker owes: their own cash came in, so the
+ *  amount goes back in cash, to the nearest $50. Anyone else is paid by transfer
+ *  unless the banker says otherwise. */
+export function suggestCash(s: Pick<Settlement, 'cashBuyIn' | 'netWithBank'>): number {
+  return s.cashBuyIn > 0 && s.netWithBank > 0 ? Math.round(s.netWithBank / 50) * 50 : 0;
+}
+
+/** Settles the gap between what a player is owed and the cash they get. */
+export function transferAfterCash(owed: number, cash: number): { bankReceived: number; changeOwed: number } {
+  const difference = roundCents(owed - cash);
+  return { bankReceived: Math.max(difference, 0), changeOwed: Math.max(-difference, 0) };
 }
 
 /** New players get no credit. Same rule as the server (credit-limit.js): no
@@ -85,6 +100,11 @@ export function identifyBankPlayer(session: Session): string | null {
   return playersWithResults.length > 0 ? playersWithResults[0].id : null;
 }
 
+function getCashMode(session: Session, bankId: string): SettlementSummary['cashMode'] {
+  if (session.players.some((p) => p.id !== bankId && p.cashPaid != null)) return 'saved';
+  return session.cashInFifties ? 'suggested' : 'proportional';
+}
+
 export function calculateSettlements(session: Session): Settlement[] {
   // Online sessions imported by the bot are created already `completed` and
   // never have a bankPlayerId set (only the in-person "End Session" flow sets
@@ -92,6 +112,8 @@ export function calculateSettlements(session: Session): Settlement[] {
   // Computed at view time, so this also retroactively fixes existing imports.
   const bankId = session.bankPlayerId ?? identifyBankPlayer(session);
   if (!bankId) return [];
+
+  const cashMode = getCashMode(session, bankId);
 
   // Cash pool = all cash buy-ins from every player (physically on the table)
   const cashPool = session.players.reduce((sum, p) => {
@@ -106,29 +128,45 @@ export function calculateSettlements(session: Session): Settlement[] {
     const cashBuyIn = player.buyIns
       .filter((b) => (b.method || 'cash') === 'cash')
       .reduce((sum, b) => sum + b.amount, 0);
-    const bankBuyIn = getOwedBuyIn(player);
-    // Paid to the credit collector, so neither on the table nor owed.
-    const prepaidBuyIn = player.buyIns
-      .filter((b) => b.method === 'prepaid')
+    const creditBuyIn = getOwedBuyIn(player);
+    // Transferred to the collector, so neither on the table nor owed.
+    const bankBuyIn = player.buyIns
+      .filter((b) => b.method === 'bank')
       .reduce((sum, b) => sum + b.amount, 0);
-    const totalBuyIn = cashBuyIn + bankBuyIn + prepaidBuyIn;
+    const totalBuyIn = cashBuyIn + creditBuyIn + bankBuyIn;
     const profitLoss = player.cashOut !== null ? cashOut - totalBuyIn : 0;
 
-    // net = cashout - bank_buyin
-    // Positive: bank owes them (they get cash/bank from bank player)
-    // Negative: they owe bank (they pay via bank transfer)
-    const netWithBank = cashOut - bankBuyIn;
+    // net = cashout - credit
+    // Positive: the banker owes them (cash and/or a transfer)
+    // Negative: they owe the banker (a transfer)
+    const netWithBank = cashOut - creditBuyIn;
 
     return {
       playerId: player.id,
       playerName: player.name,
       profitLoss,
       cashBuyIn,
+      creditBuyIn,
       bankBuyIn,
-      prepaidBuyIn,
       netWithBank,
     };
   });
+
+  // Cash in $50s, as recorded or as suggested until someone records it.
+  if (cashMode !== 'proportional') {
+    const cashPaidBy = new Map(session.players.map((p) => [p.id, p.cashPaid ?? 0]));
+    const rows = raw.map((r) => {
+      if (r.playerId === bankId) return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
+      if (r.netWithBank <= 0) {
+        return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0 };
+      }
+      const cashReceived = cashMode === 'saved' ? cashPaidBy.get(r.playerId) ?? 0 : suggestCash(r);
+      return { ...r, cashReceived, bankOwed: 0, ...transferAfterCash(r.netWithBank, cashReceived) };
+    });
+    // Whatever nobody took stays with the banker.
+    const handedOut = rows.reduce((sum, r) => sum + r.cashReceived, 0);
+    return rows.map((r) => (r.playerId === bankId ? { ...r, cashReceived: Math.max(cashPool - handedOut, 0) } : r));
+  }
 
   // Total amount owed to players (sum of positive nets, excluding bank player)
   const totalOwed = raw
@@ -148,6 +186,7 @@ export function calculateSettlements(session: Session): Settlement[] {
         cashReceived: cashForBankPlayer,
         bankReceived: 0,
         bankOwed: 0,
+        changeOwed: 0,
       };
     }
 
@@ -158,12 +197,12 @@ export function calculateSettlements(session: Session): Settlement[] {
         : 0;
       const cashReceived = Math.min(cashShare, r.netWithBank);
       const bankReceived = Math.round((r.netWithBank - cashReceived) * 100) / 100;
-      return { ...r, cashReceived, bankReceived, bankOwed: 0 };
+      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0 };
     } else if (r.netWithBank < 0) {
       // Player owes money — bank transfer to bank player
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank) };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0 };
     } else {
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0 };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
     }
   });
 }
@@ -188,26 +227,30 @@ export function getSettlementSummary(session: Session): SettlementSummary | null
     ? { amount: rakeAmount, holderName: rakeHolderName, holderIsBank: rakeHolderName === bankPlayer.name }
     : null;
 
-  // Buy-ins over a credit limit were paid to the collector on the night, so
-  // the collector owes them to the bank — the mirror image of the rake.
-  const prepaidAmount = Math.round(settlements.reduce((sum, s) => sum + s.prepaidBuyIn, 0) * 100) / 100;
+  // Bank buy-ins were transferred to the collector on the night, so the
+  // collector owes them to the banker — the mirror image of the rake.
+  const collectedAmount = roundCents(settlements.reduce((sum, s) => sum + s.bankBuyIn, 0));
   const collectorName = session.creditCollector || null;
-  const prepaid = prepaidAmount > 0
-    ? { amount: prepaidAmount, collectorName, collectorIsBank: collectorName === bankPlayer.name }
+  const collected = collectedAmount > 0
+    ? { amount: collectedAmount, collectorName, collectorIsBank: collectorName === bankPlayer.name }
     : null;
+  const cashToCollect = settlements.reduce((sum, s) => sum + s.cashBuyIn, 0);
+  const cashToDistribute = nonBankSettlements.reduce((sum, s) => sum + s.cashReceived, 0);
 
   return {
     bankPlayerId: bankId,
     bankPlayerName: bankPlayer.name,
     settlements,
-    cashToCollect: settlements.reduce((sum, s) => sum + s.cashBuyIn, 0),
-    cashToDistribute: nonBankSettlements.reduce((sum, s) => sum + s.cashReceived, 0),
+    cashToCollect,
+    cashToDistribute,
     bankTransfersOut: nonBankSettlements.reduce((sum, s) => sum + s.bankReceived, 0)
       + (rake && !rake.holderIsBank ? rake.amount : 0),
-    bankTransfersIn: nonBankSettlements.reduce((sum, s) => sum + s.bankOwed, 0)
-      + (prepaid && !prepaid.collectorIsBank ? prepaid.amount : 0),
+    bankTransfersIn: nonBankSettlements.reduce((sum, s) => sum + s.bankOwed + s.changeOwed, 0)
+      + (collected && !collected.collectorIsBank ? collected.amount : 0),
     rake,
-    prepaid,
+    collected,
+    cashMode: getCashMode(session, bankId),
+    cashLeft: roundCents(cashToCollect - cashToDistribute),
   };
 }
 
