@@ -33,7 +33,7 @@ import { classifyAttachment, attachmentTrigger, visionEnabled } from './triage.j
 import { createKeyedSerializer } from './serialize.js';
 import { accountsMapFromResponse } from './bank.js';
 import { calculateSettlements, identifyBankPlayer } from './settlement.js';
-import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage } from './results-message.js';
+import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage, isResultsPost } from './results-message.js';
 import {
   formatSessionRakePost, formatSpendPost, formatGivePost, formatAdjustPost,
   formatCorrectionPost, formatBalance, rakeMirror,
@@ -771,7 +771,7 @@ async function deletePriorResultsPosts(thread, botUserId) {
     const batch = await thread.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     if (batch.size === 0) break;
     for (const msg of batch.values()) {
-      if (msg.author?.id === botUserId && (msg.content || '').startsWith('🎲')) {
+      if (msg.author?.id === botUserId && isResultsPost(msg.content)) {
         try { await msg.delete(); deleted++; }
         catch (err) { console.error(`Could not delete message ${msg.id}:`, err.message); }
       }
