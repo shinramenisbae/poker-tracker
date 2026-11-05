@@ -9,9 +9,9 @@ function mixedSession() {
     bankPlayerId: null, // force biggest-winner fallback
     players: [
       { id: 'luke', name: 'Luke', buyIns: [{ amount: 100, method: 'cash' }], cashOut: { amount: 570.5 } }, // +470.50
-      { id: 'simon', name: 'Simon', buyIns: [{ amount: 100, method: 'cash' }, { amount: 108, method: 'bank' }], cashOut: { amount: 0 } }, // -208
-      { id: 'ivan', name: 'Ivan', buyIns: [{ amount: 100, method: 'cash' }, { amount: 150, method: 'bank' }], cashOut: { amount: 0 } }, // -250
-      { id: 'george', name: 'George', buyIns: [{ amount: 200, method: 'bank' }], cashOut: { amount: 0 } }, // -200 all bank
+      { id: 'simon', name: 'Simon', buyIns: [{ amount: 100, method: 'cash' }, { amount: 108, method: 'credit' }], cashOut: { amount: 0 } }, // -208
+      { id: 'ivan', name: 'Ivan', buyIns: [{ amount: 100, method: 'cash' }, { amount: 150, method: 'credit' }], cashOut: { amount: 0 } }, // -250
+      { id: 'george', name: 'George', buyIns: [{ amount: 200, method: 'credit' }], cashOut: { amount: 0 } }, // -200 all bank
     ],
   };
 }

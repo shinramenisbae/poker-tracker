@@ -9,8 +9,8 @@ function s1(over = {}) {
     id: 's1', date: '2026-08-01', status: 'completed', bankPlayerId: null, settledAt: null,
     players: [
       { id: 'luke', name: 'Luke', buyIns: [{ amount: 100, method: 'cash' }], cashOut: { amount: 570.5 } },
-      { id: 'simon', name: 'Simon', buyIns: [{ amount: 100, method: 'cash' }, { amount: 108, method: 'bank' }], cashOut: { amount: 0 } },
-      { id: 'george', name: 'George', buyIns: [{ amount: 200, method: 'bank' }], cashOut: { amount: 0 } },
+      { id: 'simon', name: 'Simon', buyIns: [{ amount: 100, method: 'cash' }, { amount: 108, method: 'credit' }], cashOut: { amount: 0 } },
+      { id: 'george', name: 'George', buyIns: [{ amount: 200, method: 'credit' }], cashOut: { amount: 0 } },
     ],
     ...over,
   };
@@ -20,7 +20,7 @@ function s2(over = {}) {
     id: 's2', date: '2026-08-08', status: 'completed', bankPlayerId: null, settledAt: null,
     players: [
       { id: 'patt', name: 'Patt', buyIns: [{ amount: 50, method: 'cash' }], cashOut: { amount: 100 } },
-      { id: 'george', name: 'George', buyIns: [{ amount: 50, method: 'bank' }], cashOut: { amount: 0 } },
+      { id: 'george', name: 'George', buyIns: [{ amount: 50, method: 'credit' }], cashOut: { amount: 0 } },
     ],
     ...over,
   };
@@ -51,7 +51,7 @@ test('aggregateDebts: fully paid players do not appear', () => {
 });
 
 test('aggregateDebts: an active session contributes nothing', () => {
-  const active = s2({ status: 'active', players: [{ id: 'x', name: 'X', buyIns: [{ amount: 50, method: 'bank' }] }] });
+  const active = s2({ status: 'active', players: [{ id: 'x', name: 'X', buyIns: [{ amount: 50, method: 'credit' }] }] });
   const rows = aggregateDebts([s1(), active], {});
   assert.ok(!rows.some((r) => r.playerName === 'X'));
 });

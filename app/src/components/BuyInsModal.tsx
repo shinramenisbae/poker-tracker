@@ -13,8 +13,6 @@ function formatBuyInTime(ts: number | string): string {
 interface BuyInsModalProps {
   player: Player;
   onUpdateBuyIn: (buyInId: string, amount: number, method: BuyInMethod) => void;
-  /** Who over-limit buy-ins are paid to, for labelling them. */
-  creditCollector?: string | null;
   onDeleteBuyIn: (buyInId: string) => void;
   onClose: () => void;
   isLoading?: boolean;
@@ -26,9 +24,7 @@ export function BuyInsModal({
   onDeleteBuyIn,
   onClose,
   isLoading = false,
-  creditCollector = null,
 }: BuyInsModalProps) {
-  const prepaidLabel = creditCollector ? `Paid to ${creditCollector}` : 'Paid up front';
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editAmount, setEditAmount] = useState('');
   const [editMethod, setEditMethod] = useState<BuyInMethod>('cash');
@@ -95,14 +91,14 @@ export function BuyInsModal({
                         Bank
                       </button>
                       <button
-                        onClick={() => setEditMethod('prepaid')}
+                        onClick={() => setEditMethod('credit')}
                         className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                          editMethod === 'prepaid'
+                          editMethod === 'credit'
                             ? 'bg-accent-positive text-white shadow-sm'
                             : 'text-text-secondary hover:text-text-primary'
                         }`}
                       >
-                        {prepaidLabel}
+                        Credit
                       </button>
                     </div>
                     <div className="relative">
@@ -142,11 +138,11 @@ export function BuyInsModal({
                       <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${
                         (buyIn.method || 'cash') === 'cash'
                           ? 'bg-accent-amber/20 text-accent-amber'
-                          : buyIn.method === 'prepaid'
+                          : buyIn.method === 'credit'
                             ? 'bg-accent-positive/20 text-accent-positive'
                             : 'bg-accent-primary/20 text-accent-primary'
                       }`}>
-                        {buyIn.method === 'prepaid' ? prepaidLabel : (buyIn.method || 'cash')}
+                        {buyIn.method || 'cash'}
                       </span>
                       <span className="text-xs text-text-tertiary ml-2">
                         #{index + 1}

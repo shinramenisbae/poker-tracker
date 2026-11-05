@@ -15,7 +15,7 @@ export function SettlementView({ summary }: SettlementViewProps) {
   const bankSettlement = summary.settlements.find(
     (s) => s.playerId === summary.bankPlayerId
   );
-  const collector = summary.prepaid?.collectorName ?? 'the collector';
+  const collector = summary.collected?.collectorName ?? 'the collector';
 
   return (
     <div className="space-y-6">
@@ -120,24 +120,24 @@ export function SettlementView({ summary }: SettlementViewProps) {
               {formatCurrency(summary.bankTransfersIn)}
             </p>
             <p className="text-xs text-text-tertiary mt-1">
-              From losers with bank buy-ins
-              {summary.prepaid && !summary.prepaid.collectorIsBank && `, and ${collector} for buy-ins paid up front`}
+              From losers on credit
+              {summary.collected && !summary.collected.collectorIsBank && `, and ${collector} for bank buy-ins`}
             </p>
           </div>
         )}
 
-        {/* Over-limit buy-ins were paid to the collector on the night; that
-            money still belongs to the game, so it goes on to the bank. */}
-        {summary.prepaid && (
-          <div className="mt-4 pt-4 border-t border-bg-tertiary" data-testid="prepaid-summary">
-            <p className="text-sm text-text-secondary mb-1">Paid Up Front</p>
+        {/* Bank buy-ins were transferred to the collector on the night; that
+            money still belongs to the game, so it goes on to the banker. */}
+        {summary.collected && (
+          <div className="mt-4 pt-4 border-t border-bg-tertiary" data-testid="collected-summary">
+            <p className="text-sm text-text-secondary mb-1">Bank Buy-ins</p>
             <p className="text-number-sm text-accent-positive tabular-nums">
-              {formatCurrency(summary.prepaid.amount)}
+              {formatCurrency(summary.collected.amount)}
             </p>
             <p className="text-xs text-text-tertiary mt-1">
-              {summary.prepaid.collectorIsBank
-                ? `Over the credit limit, paid to ${collector} — who is banking, so it stays put`
-                : `Over the credit limit, paid to ${collector} — ${collector} transfers it to ${summary.bankPlayerName}`}
+              {summary.collected.collectorIsBank
+                ? `Transferred to ${collector} — who is banking, so it stays put`
+                : `Transferred to ${collector} — ${collector} transfers it to ${summary.bankPlayerName}`}
             </p>
           </div>
         )}
@@ -148,13 +148,18 @@ export function SettlementView({ summary }: SettlementViewProps) {
         <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-4">
           Who Pays Who
         </h3>
+        {summary.cashMode === 'suggested' && (
+          <p className="text-xs text-text-tertiary -mt-2 mb-3" data-testid="cash-suggested">
+            Cash amounts are suggestions until they are saved above.
+          </p>
+        )}
         <div className="space-y-3">
           {nonBankSettlements
             .filter((s) => s.profitLoss !== 0 || s.cashReceived > 0 || s.bankReceived > 0 || s.bankOwed > 0)
             .map((s) => {
               // Cash-only loser: their cash is already on the table, bank keeps it
               const cashLostOnTable = s.profitLoss < 0 && s.cashReceived === 0 && s.bankOwed === 0
-                && s.prepaidBuyIn === 0;
+                && s.bankBuyIn === 0;
 
               return (
                 <div
@@ -195,10 +200,17 @@ export function SettlementView({ summary }: SettlementViewProps) {
                         <span className="text-text-tertiary"> to {summary.bankPlayerName}</span>
                       </p>
                     )}
-                    {s.prepaidBuyIn > 0 && (
+                    {s.changeOwed > 0 && (
+                      <p>
+                        <span className="text-text-tertiary">{s.playerName} transfers</span>{' '}
+                        <span className="font-medium">{formatCurrency(s.changeOwed)}</span>
+                        <span className="text-text-tertiary"> back to {summary.bankPlayerName}</span>
+                      </p>
+                    )}
+                    {s.bankBuyIn > 0 && (
                       <p>
                         <span className="text-text-tertiary">
-                          Already paid {formatCurrency(s.prepaidBuyIn)} to {collector} up front
+                          Already transferred {formatCurrency(s.bankBuyIn)} to {collector}
                         </span>
                       </p>
                     )}
@@ -213,14 +225,14 @@ export function SettlementView({ summary }: SettlementViewProps) {
                 </div>
               );
             })}
-          {summary.prepaid && !summary.prepaid.collectorIsBank && (
-            <div className="py-2" data-testid="prepaid-transfer">
+          {summary.collected && !summary.collected.collectorIsBank && (
+            <div className="py-2" data-testid="collected-transfer">
               <p className="text-sm text-text-secondary">
                 <span className="font-semibold text-text-primary">{collector}</span>{' '}
                 <span className="text-text-tertiary">transfers</span>{' '}
-                <span className="font-medium">{formatCurrency(summary.prepaid.amount)}</span>{' '}
+                <span className="font-medium">{formatCurrency(summary.collected.amount)}</span>{' '}
                 <span className="px-1.5 py-0.5 rounded-full text-xs bg-accent-primary/20 text-accent-primary">bank</span>
-                <span className="text-text-tertiary"> to {summary.bankPlayerName} — buy-ins paid up front</span>
+                <span className="text-text-tertiary"> to {summary.bankPlayerName} — bank buy-ins</span>
               </p>
             </div>
           )}

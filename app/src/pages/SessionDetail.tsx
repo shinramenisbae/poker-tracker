@@ -38,11 +38,11 @@ export function SessionDetail() {
   const [cashOutPlayer, setCashOutPlayer] = useState<Player | null>(null);
   const [customBuyInPlayer, setCustomBuyInPlayer] = useState<Player | null>(null);
   const [customBuyInAmount, setCustomBuyInAmount] = useState('');
-  const [customBuyInMethod, setCustomBuyInMethod] = useState<'cash' | 'bank'>('cash');
+  const [customBuyInMethod, setCustomBuyInMethod] = useState<BuyInMethod>('cash');
   // Rebuy prompt: any buy-in after a player's first opens a confirm step asking
   // whether it's a top-up or a full-stack rebuy (optionally: with what hand).
   // Doubles as double-tap protection on the quick +$ buttons.
-  const [rebuyPrompt, setRebuyPrompt] = useState<{ player: Player; amount: number; method: 'cash' | 'bank' } | null>(null);
+  const [rebuyPrompt, setRebuyPrompt] = useState<{ player: Player; amount: number; method: BuyInMethod } | null>(null);
   const [rebuyType, setRebuyType] = useState<'top-up' | 'stacked'>('top-up');
   const [stackedHand, setStackedHand] = useState('');
   const [editBuyInsPlayer, setEditBuyInsPlayer] = useState<Player | null>(null);
@@ -163,7 +163,7 @@ export function SessionDetail() {
   const handleAddBuyIn = async (
     playerId: string,
     amount: number,
-    method: 'cash' | 'bank' = 'cash',
+    method: BuyInMethod = 'cash',
     rebuy: { isRebuy?: boolean; rebuyType?: 'top-up' | 'stacked'; stackedHand?: string } = {}
   ): Promise<boolean> => {
     if (actionLoading) return false;
@@ -186,7 +186,7 @@ export function SessionDetail() {
 
   // Quick +$ buttons: the first buy-in logs instantly; anything after that is a
   // rebuy, so open the top-up/stacked prompt instead of logging immediately.
-  const handleQuickBuyIn = (player: Player, amount: number, method: 'cash' | 'bank') => {
+  const handleQuickBuyIn = (player: Player, amount: number, method: BuyInMethod) => {
     if (player.buyIns.length === 0) {
       handleAddBuyIn(player.id, amount, method);
       return;
@@ -476,7 +476,7 @@ export function SessionDetail() {
           </div>
         </div>
 
-        {/* A bank buy-in went over the limit: the table needs to hear who pays
+        {/* A credit buy-in went over the limit: the table needs to hear who pays
             whom, now, while the player is still standing there. */}
         {creditNotice && (
           <div role="status" className="card border-accent-amber mb-4 flex items-start gap-3" data-testid="credit-notice">
@@ -484,14 +484,17 @@ export function SessionDetail() {
               <p>
                 <span className="font-semibold">{creditNotice.name}</span>{' '}
                 {creditNotice.split.newPlayer ? 'is new, so gets no credit' : `is over the ${formatCurrency(creditNotice.split.limit)} credit limit`}
-                {' '}— pay <span className="font-semibold">{formatCurrency(creditNotice.split.prepaid)}</span> to{' '}
-                <span className="font-semibold">{creditNotice.split.collector || 'the collector'}</span> now (instant transfer or cash).
+                {' '}— transfer <span className="font-semibold">{formatCurrency(creditNotice.split.bank)}</span> to{' '}
+                <span className="font-semibold">{creditNotice.split.collector || 'the collector'}</span> now.
               </p>
-              {creditNotice.split.owed > 0 && (
+              {creditNotice.split.credit > 0 && (
                 <p className="text-text-secondary mt-1">
-                  The other {formatCurrency(creditNotice.split.owed)} was added to what they owe the banker.
+                  The other {formatCurrency(creditNotice.split.credit)} went on credit.
                 </p>
               )}
+              <p className="text-text-secondary mt-1">
+                If they pay cash instead, change it to Cash under their buy-ins.
+              </p>
               {!creditNotice.split.collector && (
                 <p className="text-text-secondary mt-1">Nobody is set to collect. Set it under Credit limit.</p>
               )}
@@ -506,8 +509,8 @@ export function SessionDetail() {
           </div>
         )}
 
-        {/* Credit limit: bank buy-ins up to it are owed to the banker after the
-            game; anything over is paid straight away to the collector. */}
+        {/* Credit limit: credit up to it is owed to the banker after the game;
+            anything over becomes a bank transfer to the collector straight away. */}
         {creditApplies && (
           <div className="card mb-6">
             <h2 className="text-lg font-semibold text-text-primary mb-3">Credit limit</h2>
@@ -533,7 +536,7 @@ export function SessionDetail() {
               </div>
               <div>
                 <label htmlFor="credit-collector" className="block text-xs font-medium text-text-secondary mb-1">
-                  Over the limit, pay
+                  Bank transfers go to
                 </label>
                 <input
                   id="credit-collector"
@@ -553,8 +556,13 @@ export function SessionDetail() {
               </div>
             </div>
             <p className="text-xs text-text-tertiary mt-2">
-              Bank buy-ins over the limit are recorded as paid to them straight away. New players get no credit.
+              Credit over the limit becomes a bank transfer to them straight away. New players get no credit.
             </p>
+            {!session.creditCollector && (
+              <p className="text-sm text-accent-negative font-medium mt-2" data-testid="collector-missing">
+                Who is collecting bank transfers tonight? Enter a name and save.
+              </p>
+            )}
             {creditChanged && (
               <div className="flex gap-3 mt-3">
                 <button
@@ -1029,7 +1037,6 @@ export function SessionDetail() {
           }
           onClose={() => setEditBuyInsPlayer(null)}
           isLoading={actionLoading}
-          creditCollector={session.creditCollector}
         />
       )}
     </div>

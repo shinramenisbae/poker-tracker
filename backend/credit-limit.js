@@ -1,10 +1,10 @@
 // The credit limit: how much of a night's buy-ins a player may owe the banker.
 //
-// A 'bank' buy-in is owed and paid to the banker after the game; a 'cash' one
-// is paid on the spot. Above the limit a player has to pay straight away, to
-// whoever the session names as the collector (Nick or Stephen), so the part of
-// a bank buy-in over the limit is recorded as 'prepaid'. The collector then
-// owes that money to the banker at settlement.
+// Three ways to buy in. 'credit' is owed and paid to the banker after the game.
+// 'cash' goes to the banker, or sits on the table until there is one. 'bank' is
+// transferred straight away to whoever the session names as the collector (Nick
+// or Stephen), who passes it to the banker at settlement. The part of a credit
+// buy-in over the limit is recorded as 'bank'.
 //
 // New players — nobody of that name has played a session before — get no
 // credit at all.
@@ -21,6 +21,8 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
+const BUY_IN_METHODS = ['cash', 'bank', 'credit'];
+
 function failure(code, message) {
   const err = new Error(message);
   err.code = code;
@@ -28,16 +30,16 @@ function failure(code, message) {
 }
 
 /**
- * Splits one bank buy-in at the limit.
- * @returns {{amount: number, method: 'bank'|'prepaid'}[]}
+ * Splits one credit buy-in at the limit.
+ * @returns {{amount: number, method: 'credit'|'bank'}[]}
  */
 function splitBuyIn({ amount, owedSoFar, limit }) {
   const room = Math.max(0, cents(limit - owedSoFar));
   const owed = Math.min(cents(amount), room);
-  const prepaid = cents(amount - owed);
+  const overLimit = cents(amount - owed);
   const parts = [];
-  if (owed > 0) parts.push({ amount: owed, method: 'bank' });
-  if (prepaid > 0) parts.push({ amount: prepaid, method: 'prepaid' });
+  if (owed > 0) parts.push({ amount: owed, method: 'credit' });
+  if (overLimit > 0) parts.push({ amount: overLimit, method: 'bank' });
   return parts;
 }
 
@@ -50,14 +52,18 @@ async function isNewPlayer(db, sessionId, name) {
 }
 
 /**
- * Records a buy-in, splitting a bank buy-in that goes over the player's limit.
- * @returns {Promise<{creditSplit: null | {owed: number, prepaid: number,
+ * Records a buy-in, splitting a credit buy-in that goes over the player's limit.
+ * @returns {Promise<{creditSplit: null | {credit: number, bank: number,
  *   collector: string|null, limit: number, newPlayer: boolean}}>}
  *   creditSplit is set only when some of it had to be paid up front.
  */
 async function addBuyIn(db, { sessionId, playerId, amount, method, isRebuy, rebuyType, stackedHand }) {
   const rebuyTypeClean = rebuyType === 'top-up' || rebuyType === 'stacked' ? rebuyType : null;
   const stackedHandClean = (typeof stackedHand === 'string' && stackedHand.trim()) || null;
+
+  if (method !== undefined && method !== null && !BUY_IN_METHODS.includes(method)) {
+    throw failure('BAD_METHOD', `method must be one of ${BUY_IN_METHODS.join(', ')}`);
+  }
 
   return withTransaction(db, async () => {
     const player = await getAsync(db, 'SELECT id, name FROM players WHERE id = ? AND sessionId = ?', [playerId, sessionId]);
@@ -66,17 +72,17 @@ async function addBuyIn(db, { sessionId, playerId, amount, method, isRebuy, rebu
 
     let parts = [{ amount, method: method || 'cash' }];
     let creditSplit = null;
-    const enforced = method === 'bank' && session.gameType !== 'online' && session.status !== 'completed';
+    const enforced = method === 'credit' && session.gameType !== 'online' && session.status !== 'completed';
     if (enforced) {
       const newPlayer = await isNewPlayer(db, sessionId, player.name);
       const limit = newPlayer ? 0 : Number(session.creditLimit ?? DEFAULT_CREDIT_LIMIT);
       const { owedSoFar } = await getAsync(db,
-        "SELECT COALESCE(SUM(amount), 0) AS owedSoFar FROM buyIns WHERE playerId = ? AND method = 'bank'", [playerId]);
+        "SELECT COALESCE(SUM(amount), 0) AS owedSoFar FROM buyIns WHERE playerId = ? AND method = 'credit'", [playerId]);
       parts = splitBuyIn({ amount: Number(amount), owedSoFar, limit });
-      const prepaid = parts.find((p) => p.method === 'prepaid');
-      if (prepaid) {
-        const owed = parts.find((p) => p.method === 'bank');
-        creditSplit = { owed: owed ? owed.amount : 0, prepaid: prepaid.amount,
+      const overLimit = parts.find((p) => p.method === 'bank');
+      if (overLimit) {
+        const owed = parts.find((p) => p.method === 'credit');
+        creditSplit = { credit: owed ? owed.amount : 0, bank: overLimit.amount,
           collector: session.creditCollector || null, limit, newPlayer };
       }
     }
@@ -92,4 +98,4 @@ async function addBuyIn(db, { sessionId, playerId, amount, method, isRebuy, rebu
   });
 }
 
-module.exports = { DEFAULT_CREDIT_LIMIT, splitBuyIn, isNewPlayer, addBuyIn };
+module.exports = { DEFAULT_CREDIT_LIMIT, BUY_IN_METHODS, splitBuyIn, isNewPlayer, addBuyIn };

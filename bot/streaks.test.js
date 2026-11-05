@@ -15,7 +15,7 @@ function sess(id, date, results, status = 'completed') {
     players: results.map(([name, profit], i) => ({
       id: `${id}-p${i}`,
       name,
-      buyIns: [{ amount: 100, method: 'bank' }],
+      buyIns: [{ amount: 100, method: 'credit' }],
       cashOut: { amount: 100 + profit },
     })),
   };

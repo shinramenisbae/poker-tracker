@@ -104,30 +104,30 @@ test('rebuildResultsMessage: a bare message is simply replaced', () => {
   assert.equal(rebuilt, 'new body only');
 });
 
-// Leo owed his $500 limit and paid Stephen $300 more on the night.
-const withPrepaid = (over = {}) => session({
+// Leo owed his $500 limit and transferred Stephen $300 more on the night.
+const withBankBuyIns = (over = {}) => session({
   creditCollector: 'Stephen',
   players: [
     { id: 'p-daniel', name: 'Daniel H', buyIns: [{ amount: 200, method: 'cash' }], cashOut: { amount: 1000 } },
-    { id: 'p-leo', name: 'Leo', buyIns: [{ amount: 500, method: 'bank' }, { amount: 300, method: 'prepaid' }], cashOut: { amount: 0 } },
+    { id: 'p-leo', name: 'Leo', buyIns: [{ amount: 500, method: 'credit' }, { amount: 300, method: 'bank' }], cashOut: { amount: 0 } },
   ],
   ...over,
 });
 
-test('formatResultsMessage: money paid up front goes from the collector to the banker', () => {
-  const msg = messageFor(withPrepaid());
-  assert.match(msg, /💳 \*\*Paid up front\*\* \(over the credit limit\): \$300\.00 — Stephen → Daniel H/);
+test('formatResultsMessage: bank buy-ins go from the collector to the banker', () => {
+  const msg = messageFor(withBankBuyIns());
+  assert.match(msg, /💳 \*\*Bank buy-ins\*\*: \$300\.00 — Stephen → Daniel H/);
   // Leo lost all $800 he bought in for.
   assert.match(msg, /• Leo: −\$800\.00/);
 });
 
-test('formatResultsMessage: a collector who banks keeps what was paid up front', () => {
-  const msg = messageFor(withPrepaid({ bankPlayerId: 'p-daniel', creditCollector: 'Daniel H' }));
+test('formatResultsMessage: a collector who banks keeps the bank buy-ins', () => {
+  const msg = messageFor(withBankBuyIns({ bankPlayerId: 'p-daniel', creditCollector: 'Daniel H' }));
   assert.match(msg, /\$300\.00 — kept by Daniel H/);
 });
 
-test('formatResultsMessage: nothing paid up front, no line', () => {
-  assert.doesNotMatch(messageFor(session()), /Paid up front/);
+test('formatResultsMessage: no bank buy-ins, no line', () => {
+  assert.doesNotMatch(messageFor(session()), /Bank buy-ins/);
 });
 
 test('isResultsPost: found whether or not it opens with the poker role mention', () => {
@@ -141,4 +141,44 @@ test('isResultsPost: other bot posts are not results', () => {
   assert.equal(isResultsPost('💸 **Still unpaid — 2026-11-05**'), false);
   assert.equal(isResultsPost(''), false);
   assert.equal(isResultsPost(undefined), false);
+});
+
+// Simon is owed $495 and Min, who lost, is owed $450 of her own cash back.
+const withCash = (cash = {}) => session({
+  bankPlayerId: 'p-leo',
+  cashInFifties: 1,
+  players: [
+    { id: 'p-leo', name: 'Leo', buyIns: [{ amount: 250, method: 'credit' }], cashOut: { amount: 800 } },
+    { id: 'p-simon', name: 'Simon', cashPaid: cash.simon, buyIns: [{ amount: 400, method: 'credit' }], cashOut: { amount: 895 } },
+    { id: 'p-min', name: 'Min', cashPaid: cash.min, buyIns: [{ amount: 1000, method: 'cash' }, { amount: 500, method: 'credit' }], cashOut: { amount: 950 } },
+  ],
+});
+
+test('formatResultsMessage: says nothing about cash until someone records it', () => {
+  const msg = messageFor(withCash());
+  assert.doesNotMatch(msg, /gets \$/);
+  assert.match(msg, /• Min: −\$550\.00  _\(paid in cash on the table\)_/);
+});
+
+test('formatResultsMessage: recorded cash shows how each player is paid', () => {
+  const msg = messageFor(withCash({ simon: 500, min: 450 }));
+  assert.match(msg, /• Simon: .*_\(gets \$500\.00 cash, transfers \$5\.00 back\)_/);
+  assert.match(msg, /• Min: −\$550\.00  _\(gets \$450\.00 cash\)_/);
+});
+
+test('formatResultsMessage: a player recorded with no cash is paid by transfer', () => {
+  const msg = messageFor(withCash({ simon: 0, min: 450 }));
+  assert.match(msg, /• Simon: .*_\(gets \$495\.00 by transfer\)_/);
+});
+
+test('rebuildResultsMessage: keeps the role mention and heater banner above the heading', () => {
+  const above = '<@&123>\n# 🚨🔥 6 IN A ROW 🔥🚨\n\n';
+  const rebuilt = rebuildResultsMessage(`${above}🎲 **Session results — 2026-11-05**\nold`, '🎲 **Session results — 2026-11-05**\nnew');
+  assert.equal(rebuilt, `${above}🎲 **Session results — 2026-11-05**\nnew`);
+});
+
+test('rebuildResultsMessage: the /help hint gives way rather than exceed the Discord limit', () => {
+  const hint = '\n\n\n_New here? Run `/help`._';
+  const rebuilt = rebuildResultsMessage(`🎲 **Session results — d**${hint}`, 'x'.repeat(1990));
+  assert.equal(rebuilt, 'x'.repeat(1990));
 });

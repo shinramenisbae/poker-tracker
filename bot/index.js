@@ -736,7 +736,7 @@ async function processThreadUnlocked(thread, trigger) {
     const buyIn = Number(aggregatedRows[i].buyIn) || 0;
     if (buyIn <= 0) continue;
     await trackerPost(`/sessions/${created.id}/players/${players[i].id}/buyins`, {
-      amount: buyIn, method: 'bank', isRebuy: false,
+      amount: buyIn, method: 'credit', isRebuy: false,
     });
   }
 
@@ -2200,6 +2200,38 @@ app.post('/session-rake/:sessionId', withGuildFromRequest(async (req, res) => {
     res.json(posted.ok ? { ok: true, ...posted } : { ok: false, error: posted.error });
   } catch (err) {
     console.error('session-rake error:', err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+}));
+
+// POST /results-changed/:sessionId — the numbers changed in the tracker without
+// anyone needing to be told, such as who was paid in cash. Edits the results
+// post with no note and no pings.
+app.post('/results-changed/:sessionId', withGuildFromRequest(async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    const session = await trackerGet(`/sessions/${sessionId}`);
+    if (!session.discordThreadId) return res.json({ ok: true, skipped: 'not announced' });
+
+    const thread = await client.channels.fetch(session.discordThreadId).catch(() => null);
+    if (!thread || !thread.isThread()) {
+      return res.status(404).json({ error: `Thread ${session.discordThreadId} not found` });
+    }
+    await unarchiveIfArchived(thread);
+
+    const messages = await thread.messages.fetch({ limit: 50 });
+    const posted = messages.find((m) => m.author.id === client.user.id && isResultsPost(m.content));
+    if (!posted) return res.json({ ok: true, edited: false });
+
+    const bankAccounts = await fetchBankAccounts();
+    const rebuilt = rebuildResultsMessage(
+      posted.content,
+      formatResultsMessage(session, computePerPlayerResults(session), bankAccounts)
+    );
+    await posted.edit({ content: rebuilt, allowedMentions: { parse: [] } });
+    res.json({ ok: true, edited: true });
+  } catch (err) {
+    console.error('results-changed error:', err);
     res.status(500).json({ error: err.message || String(err) });
   }
 }));

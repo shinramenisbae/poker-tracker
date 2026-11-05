@@ -268,6 +268,30 @@ db.serialize(() => {
     // Ignore error if column already exists
   });
 
+  // Migration: buy-in methods renamed. 'credit' is now what is owed to the
+  // banker (was 'bank'); 'bank' is a transfer to the collector up front (was
+  // 'prepaid'). Rewriting rows can only ever happen once, or a new 'bank' would
+  // turn into a debt, so it is guarded by a marker written in the same
+  // transaction.
+  db.run(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, appliedAt TEXT NOT NULL)`);
+  const notYetRenamed = `NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = 'buyin-method-names')`;
+  db.run('BEGIN IMMEDIATE');
+  db.run(`UPDATE buyIns SET method = 'credit' WHERE method = 'bank' AND ${notYetRenamed}`);
+  db.run(`UPDATE buyIns SET method = 'bank' WHERE method = 'prepaid' AND ${notYetRenamed}`);
+  db.run(`INSERT OR IGNORE INTO schema_migrations (name, appliedAt) VALUES ('buyin-method-names', datetime('now'))`);
+  db.run('COMMIT');
+
+  // Migration: cash handed out by the banker, in $50s. cashPaid is what was
+  // recorded for a player, null until someone saves it. cashInFifties marks a
+  // session under that rule; older ones keep their proportional split until a
+  // cash amount is saved for them.
+  db.run(`ALTER TABLE players ADD COLUMN cashPaid REAL`, (err) => {
+    // Ignore error if column already exists
+  });
+  db.run(`ALTER TABLE sessions ADD COLUMN cashInFifties INTEGER NOT NULL DEFAULT 0`, (err) => {
+    // Ignore error if column already exists
+  });
+
   // Migration: where the bot posts the rake pile. Unset means it records rake
   // but posts nothing, which is how a second group starts out.
   db.run(`ALTER TABLE bot_settings ADD COLUMN rakeChannelId TEXT`, (err) => {
