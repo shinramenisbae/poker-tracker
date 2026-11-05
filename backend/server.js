@@ -5,10 +5,11 @@ const path = require('path');
 const db = require('./database');
 const { endSession } = require('./end-session');
 const { canChangeBanker } = require('./change-banker');
+const { addBuyIn, DEFAULT_CREDIT_LIMIT } = require('./credit-limit');
 const { pickBankPlayer } = require('./bank-player');
 const { balancesFrom, checkEntry, cents } = require('./rake-ledger');
 const { resolveMergedName, redirectOf, currentPlayerName, movePayments } = require('./merged-names');
-const { allAsync } = require('./db-async');
+const { allAsync, getAsync } = require('./db-async');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
@@ -265,15 +266,25 @@ app.post('/api/sessions', async (req, res) => {
       return res.status(500).json({ error: err.message });
     }
   }
+  // Whoever collected over-limit money last time usually does again, so a new
+  // session starts with them; the limit itself always starts at $500.
+  let creditCollector = null;
+  try {
+    const last = await getAsync(db, `SELECT creditCollector FROM sessions
+                                     WHERE creditCollector IS NOT NULL ORDER BY createdAt DESC LIMIT 1`);
+    creditCollector = last ? last.creditCollector : null;
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
   const id = generateId();
   const now = new Date().toISOString();
 
   const stmt = db.prepare(`
-    INSERT INTO sessions (id, date, status, notes, gameType, discordThreadId, createdAt, updatedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, date, status, notes, gameType, discordThreadId, createdAt, updatedAt, creditLimit, creditCollector)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  stmt.run(id, date || now.split('T')[0], status || 'active', notes || '', gameType || 'in-person', discordThreadId || null, now, now, function(err) {
+  stmt.run(id, date || now.split('T')[0], status || 'active', notes || '', gameType || 'in-person', discordThreadId || null, now, now, DEFAULT_CREDIT_LIMIT, creditCollector, function(err) {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
@@ -343,8 +354,11 @@ app.post('/api/sessions', async (req, res) => {
 // PUT /api/sessions/:id - Update session
 app.put('/api/sessions/:id', (req, res) => {
   const sessionId = req.params.id;
-  const { date, status, notes, bankPlayerId, gameType, discordThreadId } = req.body;
+  const { date, status, notes, bankPlayerId, gameType, discordThreadId, creditLimit, creditCollector } = req.body;
   const now = new Date().toISOString();
+  if (creditLimit !== undefined && !(Number(creditLimit) >= 0)) {
+    return res.status(400).json({ error: 'creditLimit must be $0 or more' });
+  }
 
   db.get('SELECT * FROM sessions WHERE id = ?', [sessionId], (err, existing) => {
     if (err) {
@@ -356,7 +370,8 @@ app.put('/api/sessions/:id', (req, res) => {
 
     const stmt = db.prepare(`
       UPDATE sessions
-      SET date = ?, status = ?, notes = ?, bankPlayerId = ?, gameType = ?, discordThreadId = ?, updatedAt = ?
+      SET date = ?, status = ?, notes = ?, bankPlayerId = ?, gameType = ?, discordThreadId = ?,
+          creditLimit = ?, creditCollector = ?, updatedAt = ?
       WHERE id = ?
     `);
 
@@ -367,6 +382,8 @@ app.put('/api/sessions/:id', (req, res) => {
       bankPlayerId !== undefined ? bankPlayerId : existing.bankPlayerId,
       gameType || existing.gameType,
       discordThreadId !== undefined ? discordThreadId : existing.discordThreadId,
+      creditLimit !== undefined ? Math.round(Number(creditLimit) * 100) / 100 : existing.creditLimit,
+      creditCollector !== undefined ? ((creditCollector || '').trim() || null) : existing.creditCollector,
       now,
       sessionId,
       function(err) {
@@ -603,77 +620,27 @@ app.post('/api/sessions/:id/players', async (req, res) => {
 });
 
 // POST /api/sessions/:id/players/:playerId/buyins - Add buy-in
-app.post('/api/sessions/:id/players/:playerId/buyins', (req, res) => {
+// A bank buy-in over the player's credit limit is split, the part over the
+// limit recorded as paid up front to the session's collector — see
+// credit-limit.js. creditSplit on the response says so, for the page to tell
+// the table who has to pay whom right now.
+app.post('/api/sessions/:id/players/:playerId/buyins', async (req, res) => {
   const sessionId = req.params.id;
   const playerId = req.params.playerId;
   const { amount, isRebuy, method, rebuyType, stackedHand } = req.body;
-  // Rebuy context (optional): 'top-up' = added chips while still stacked;
-  // 'stacked' = lost the whole stack. stackedHand is free text like "AA".
-  const rebuyTypeClean = rebuyType === 'top-up' || rebuyType === 'stacked' ? rebuyType : null;
-  const stackedHandClean = (typeof stackedHand === 'string' && stackedHand.trim()) || null;
 
-  db.get('SELECT * FROM players WHERE id = ?', [playerId], (err, player) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!player) {
-      return res.status(404).json({ error: 'Player not found' });
-    }
+  let creditSplit;
+  try {
+    ({ creditSplit } = await addBuyIn(db, { sessionId, playerId, amount, method, isRebuy, rebuyType, stackedHand }));
+  } catch (err) {
+    if (err.code === 'NOT_FOUND') return res.status(404).json({ error: err.message });
+    return res.status(500).json({ error: err.message });
+  }
 
-    const id = generateId();
-    const now = new Date().toISOString();
-
-    const stmt = db.prepare(`
-      INSERT INTO buyIns (id, playerId, amount, timestamp, isRebuy, method, rebuyType, stackedHand)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    stmt.run(id, playerId, amount, now, isRebuy ? 1 : 0, method || 'cash', rebuyTypeClean, stackedHandClean, function(err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      stmt.finalize();
-      
-      // Return full updated session
-      db.get('SELECT * FROM sessions WHERE id = ?', [sessionId], (err, session) => {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
-
-        db.all('SELECT * FROM players WHERE sessionId = ?', [sessionId], (err, players) => {
-          if (err) {
-            return res.status(500).json({ error: err.message });
-          }
-
-          if (!players || players.length === 0) {
-            return res.json({ ...session, players: [] });
-          }
-
-          let completedPlayers = 0;
-          const playersWithBuyIns = new Array(players.length);
-
-          players.forEach((p, index) => {
-            db.all('SELECT * FROM buyIns WHERE playerId = ? ORDER BY timestamp', [p.id], (err, buyIns) => {
-              if (err) {
-                return res.status(500).json({ error: err.message });
-              }
-              playersWithBuyIns[index] = {
-                ...p,
-                buyIns: buyIns || [],
-                cashOut: p.cashOutAmount != null
-                  ? { amount: p.cashOutAmount, timestamp: new Date(p.cashOutDate).getTime() }
-                  : null,
-              };
-              completedPlayers++;
-
-              if (completedPlayers === players.length) {
-                res.status(201).json({ ...session, players: playersWithBuyIns });
-              }
-            });
-          });
-        });
-      });
-    });
+  readSession(sessionId, (err, session) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    res.status(201).json({ ...session, creditSplit });
   });
 });
 

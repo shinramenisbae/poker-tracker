@@ -111,6 +111,18 @@ function formatResultsMessage(session, results, bankAccounts) {
       : `🧾 **Rake**: ${formatCash(rakeAmount)} → ${holder || 'nobody named'}\n\n`;
   }
 
+  // Buy-ins over the credit limit were paid on the night to the collector,
+  // who owes them to the bank — the rake's mirror image.
+  const prepaidAmount = Math.round((session.players || []).reduce((sum, p) => sum + (p.buyIns || [])
+    .filter((b) => b.method === 'prepaid')
+    .reduce((s, b) => s + (Number(b.amount) || 0), 0), 0) * 100) / 100;
+  if (prepaidAmount > 0.005) {
+    const collector = session.creditCollector || null;
+    msg += bankPlayer && collector === bankPlayer.name
+      ? `💳 **Paid up front** (over the credit limit): ${formatCash(prepaidAmount)} — kept by ${collector}\n\n`
+      : `💳 **Paid up front** (over the credit limit): ${formatCash(prepaidAmount)} — ${collector || 'whoever collected it'} → ${bankPlayer ? bankPlayer.name : 'the bank player'}\n\n`;
+  }
+
   if (bankPlayer) {
     msg += `🏦 **Bank player: ${bankPlayer.name}**\n`;
     if (bankInfo) {

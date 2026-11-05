@@ -48,6 +48,9 @@ export function NewSession() {
         // Rake is entered on the live session, counted with the stacks.
         rakeAmount: 0,
         rakeHolder: null,
+        // The server sets both: $500, and whoever collected last session.
+        creditLimit: 500,
+        creditCollector: null,
         players: initialPlayers.map((name) => ({
           id: generateId(),
           name,

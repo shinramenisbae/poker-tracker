@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getSessionTotals, getSettlementSummary, getLiveBalance } from './calculations';
+import { getSessionTotals, getSettlementSummary, getLiveBalance, getOwedBuyIn, isNewPlayer } from './calculations';
 import type { Session } from '../types';
 
 // Daniel H banks: $200 in, $1,415 out. Simon loses $820. Rake of $133 was taken
@@ -133,5 +133,75 @@ describe('getLiveBalance', () => {
 
   it('a session with nobody in it yet is just playing', () => {
     expect(getLiveBalance(session({ status: 'active', players: [], rakeAmount: 0 }))).toEqual({ state: 'playing', onTable: 0 });
+  });
+});
+
+// Leo is at his $500 limit and topped up $300 more, paid to Stephen on the
+// spot. Daniel H banks: $200 cash in, $1,000 out.
+function creditSession(over: Partial<Session> = {}): Session {
+  return session({
+    rakeAmount: 0,
+    creditLimit: 500,
+    creditCollector: 'Stephen',
+    players: [
+      {
+        id: 'p-daniel', name: 'Daniel H', paymentMethod: 'cash', cashOut: { amount: 1000, timestamp: 0 },
+        buyIns: [{ id: 'b1', amount: 200, method: 'cash', timestamp: 0, notes: '' }],
+      },
+      {
+        id: 'p-leo', name: 'Leo', paymentMethod: 'bank', cashOut: { amount: 0, timestamp: 0 },
+        buyIns: [
+          { id: 'b2', amount: 500, method: 'bank', timestamp: 0, notes: '' },
+          { id: 'b3', amount: 300, method: 'prepaid', timestamp: 0, notes: '' },
+        ],
+      },
+    ],
+    ...over,
+  });
+}
+
+describe('getSettlementSummary with buy-ins paid up front', () => {
+  it('the player owes the banker only what was on credit', () => {
+    const leo = getSettlementSummary(creditSession())!.settlements.find((s) => s.playerId === 'p-leo')!;
+    expect(leo.bankOwed).toBe(500);
+    expect(leo.prepaidBuyIn).toBe(300);
+    expect(leo.profitLoss).toBe(-800);
+  });
+
+  it('the collector owes the banker what was paid up front', () => {
+    const summary = getSettlementSummary(creditSession())!;
+    expect(summary.prepaid).toEqual({ amount: 300, collectorName: 'Stephen', collectorIsBank: false });
+    expect(summary.bankTransfersIn).toBe(800);
+  });
+
+  it('the money adds up: cash + transfers in pay the banker out', () => {
+    const summary = getSettlementSummary(creditSession())!;
+    const daniel = summary.settlements.find((s) => s.playerId === 'p-daniel')!;
+    expect(summary.cashToCollect + summary.bankTransfersIn).toBe(daniel.cashReceived + 800);
+    expect(summary.cashToCollect + summary.bankTransfersIn).toBe(1000);
+  });
+
+  it('nothing moves when the collector is banking', () => {
+    const summary = getSettlementSummary(creditSession({ creditCollector: 'Daniel H' }))!;
+    expect(summary.prepaid).toEqual({ amount: 300, collectorName: 'Daniel H', collectorIsBank: true });
+    expect(summary.bankTransfersIn).toBe(500);
+  });
+
+  it('no prepaid line when nobody went over', () => {
+    expect(getSettlementSummary(session())!.prepaid).toBeNull();
+  });
+});
+
+describe('credit', () => {
+  it('only bank buy-ins are owed', () => {
+    const leo = creditSession().players[1];
+    expect(getOwedBuyIn(leo)).toBe(500);
+  });
+
+  it('a name never seen in another session is new, whatever its case', () => {
+    const other = creditSession({ id: 's2' });
+    expect(isNewPlayer('Newbie', 's1', [creditSession(), other])).toBe(true);
+    expect(isNewPlayer('leo ', 's1', [creditSession(), other])).toBe(false);
+    expect(isNewPlayer('Leo', 's1', [creditSession()])).toBe(true);
   });
 });

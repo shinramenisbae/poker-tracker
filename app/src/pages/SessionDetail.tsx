@@ -1,8 +1,10 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
-import type { Player } from '../types';
-import type { NameRedirect } from '../api';
+import type { BuyInMethod, CreditSplit, Player, Session } from '../types';
+import type { NameRedirect, AllPaymentsResponse } from '../api';
+import { fetchSessions, fetchAllPayments } from '../api';
+import { aggregateDebts } from '../utils/debts';
 import { PlayerRow } from '../components/PlayerRow';
 import { CashOutModal } from '../components/CashOutModal';
 import { BuyInsModal } from '../components/BuyInsModal';
@@ -10,6 +12,8 @@ import {
   getTotalBuyIn,
   getSessionTotals,
   getLiveBalance,
+  getOwedBuyIn,
+  isNewPlayer,
   formatCurrency,
   formatDate,
 } from '../utils/calculations';
@@ -17,7 +21,7 @@ import {
 export function SessionDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { getSession, endSession, setSessionRake, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
+  const { getSession, updateSession, endSession, setSessionRake, addPlayerToSession, addPlayerBuyIn, updatePlayerBuyIn, deletePlayerBuyIn, cashOutPlayer: cashOutPlayerApi, error, isLoading } = useSessions(id);
 
   const session = getSession(id || '');
 
@@ -52,6 +56,32 @@ export function SessionDetail() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
+  // Credit limit: what a player may owe the banker tonight. null means showing
+  // what is saved; otherwise it holds what is being typed.
+  const [creditDraft, setCreditDraft] = useState<{ limit: string; collector: string } | null>(null);
+  // Said once, right after a bank buy-in went over someone's limit.
+  const [creditNotice, setCreditNotice] = useState<{ name: string; split: CreditSplit } | null>(null);
+  // Every session and payment, for who is new (no credit) and who still owes
+  // from earlier nights. Loaded once; a failure just leaves both unshown.
+  const [history, setHistory] = useState<{ sessions: Session[]; payments: AllPaymentsResponse['paymentsBySession'] } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([fetchSessions(), fetchAllPayments()])
+      .then(([sessions, payments]) => {
+        if (!cancelled) setHistory({ sessions, payments: payments.paymentsBySession });
+      })
+      .catch((err) => console.error('Error loading credit history:', err));
+    return () => { cancelled = true; };
+  }, [id]);
+  const oldDebts = useMemo(() => {
+    const byName = new Map<string, { total: number; sessionCount: number }>();
+    if (!history) return byName;
+    for (const row of aggregateDebts(history.sessions.filter((s) => s.id !== id), history.payments)) {
+      byName.set(row.playerName.trim().toLowerCase(), { total: row.total, sessionCount: row.sessionCount });
+    }
+    return byName;
+  }, [history, id]);
+
   if (!session) {
     if (isLoading) {
       return (
@@ -85,6 +115,13 @@ export function SessionDetail() {
   const savedRake = session.rakeAmount ?? 0;
   const rakeAmountShown = rakeDraft ? rakeDraft.amount : savedRake > 0 ? String(savedRake) : '';
   const rakeHolderShown = rakeDraft ? rakeDraft.holder : session.rakeHolder ?? '';
+  // Online sessions are imported after the game: nothing to enforce.
+  const creditApplies = isLive && session.gameType !== 'online';
+  const savedLimit = session.creditLimit ?? 500;
+  const creditLimitShown = creditDraft ? creditDraft.limit : String(savedLimit);
+  const creditCollectorShown = creditDraft ? creditDraft.collector : session.creditCollector ?? '';
+  const creditChanged = creditDraft !== null
+    && (Number(creditDraft.limit) !== savedLimit || (creditDraft.collector.trim() || null) !== (session.creditCollector ?? null));
   const rakeChanged = rakeDraft !== null
     && ((Number(rakeDraft.amount) || 0) !== savedRake || (rakeDraft.holder.trim() || null) !== (session.rakeHolder ?? null));
 
@@ -135,7 +172,9 @@ export function SessionDetail() {
     setActionError(null);
 
     try {
-      await addPlayerBuyIn(session.id, playerId, amount, method, rebuy);
+      const updated = await addPlayerBuyIn(session.id, playerId, amount, method, rebuy);
+      const name = session.players.find((p) => p.id === playerId)?.name ?? 'This player';
+      setCreditNotice(updated.creditSplit ? { name, split: updated.creditSplit } : null);
       return true;
     } catch {
       setActionError('Failed to add buy-in. Please try again.');
@@ -210,7 +249,7 @@ export function SessionDetail() {
     }
   };
 
-  const handleUpdateBuyIn = async (playerId: string, buyInId: string, amount: number, method: 'cash' | 'bank') => {
+  const handleUpdateBuyIn = async (playerId: string, buyInId: string, amount: number, method: BuyInMethod) => {
     if (actionLoading) return;
     setActionLoading(true);
     setActionError(null);
@@ -231,6 +270,25 @@ export function SessionDetail() {
       await deletePlayerBuyIn(session.id, playerId, buyInId);
     } catch {
       setActionError('Failed to delete buy-in. Please try again.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSaveCredit = async () => {
+    if (!creditDraft || actionLoading) return;
+    const limit = Number(creditDraft.limit);
+    if (creditDraft.limit.trim() === '' || Number.isNaN(limit) || limit < 0) {
+      setActionError('Credit limit must be $0 or more.');
+      return;
+    }
+    setActionLoading(true);
+    setActionError(null);
+    try {
+      await updateSession(session.id, { creditLimit: limit, creditCollector: creditDraft.collector.trim() || null });
+      setCreditDraft(null);
+    } catch {
+      setActionError('Failed to save the credit limit. Please try again.');
     } finally {
       setActionLoading(false);
     }
@@ -418,6 +476,106 @@ export function SessionDetail() {
           </div>
         </div>
 
+        {/* A bank buy-in went over the limit: the table needs to hear who pays
+            whom, now, while the player is still standing there. */}
+        {creditNotice && (
+          <div role="status" className="card border-accent-amber mb-4 flex items-start gap-3" data-testid="credit-notice">
+            <div className="flex-1 text-sm text-text-primary">
+              <p>
+                <span className="font-semibold">{creditNotice.name}</span>{' '}
+                {creditNotice.split.newPlayer ? 'is new, so gets no credit' : `is over the ${formatCurrency(creditNotice.split.limit)} credit limit`}
+                {' '}— pay <span className="font-semibold">{formatCurrency(creditNotice.split.prepaid)}</span> to{' '}
+                <span className="font-semibold">{creditNotice.split.collector || 'the collector'}</span> now (instant transfer or cash).
+              </p>
+              {creditNotice.split.owed > 0 && (
+                <p className="text-text-secondary mt-1">
+                  The other {formatCurrency(creditNotice.split.owed)} was added to what they owe the banker.
+                </p>
+              )}
+              {!creditNotice.split.collector && (
+                <p className="text-text-secondary mt-1">Nobody is set to collect. Set it under Credit limit.</p>
+              )}
+            </div>
+            <button
+              onClick={() => setCreditNotice(null)}
+              aria-label="Dismiss"
+              className="p-1 -m-1 rounded-full text-text-tertiary hover:text-text-primary"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Credit limit: bank buy-ins up to it are owed to the banker after the
+            game; anything over is paid straight away to the collector. */}
+        {creditApplies && (
+          <div className="card mb-6">
+            <h2 className="text-lg font-semibold text-text-primary mb-3">Credit limit</h2>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="credit-limit" className="block text-xs font-medium text-text-secondary mb-1">
+                  Each player may owe
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">$</span>
+                  <input
+                    id="credit-limit"
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    value={creditLimitShown}
+                    onChange={(e) => setCreditDraft({ limit: e.target.value, collector: creditCollectorShown })}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCredit(); }}
+                    className="input w-full pl-7 tabular-nums"
+                    disabled={actionLoading}
+                  />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="credit-collector" className="block text-xs font-medium text-text-secondary mb-1">
+                  Over the limit, pay
+                </label>
+                <input
+                  id="credit-collector"
+                  type="text"
+                  value={creditCollectorShown}
+                  onChange={(e) => setCreditDraft({ limit: creditLimitShown, collector: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleSaveCredit(); }}
+                  placeholder="Nick or Stephen"
+                  className="input w-full"
+                  list="credit-collector-options"
+                  disabled={actionLoading}
+                />
+                <datalist id="credit-collector-options">
+                  <option value="Nick" />
+                  <option value="Stephen" />
+                </datalist>
+              </div>
+            </div>
+            <p className="text-xs text-text-tertiary mt-2">
+              Bank buy-ins over the limit are recorded as paid to them straight away. New players get no credit.
+            </p>
+            {creditChanged && (
+              <div className="flex gap-3 mt-3">
+                <button
+                  onClick={() => { setCreditDraft(null); setActionError(null); }}
+                  disabled={actionLoading}
+                  className="flex-1 btn-secondary disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveCredit}
+                  disabled={actionLoading}
+                  className="flex-1 btn-primary disabled:opacity-50"
+                >
+                  {actionLoading ? 'Saving…' : 'Save credit limit'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Players */}
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -441,6 +599,13 @@ export function SessionDetail() {
                 setStackedHand('');
               }}
               disabled={actionLoading}
+              credit={creditApplies && history ? {
+                owed: getOwedBuyIn(player),
+                limit: savedLimit,
+                newPlayer: isNewPlayer(player.name, session.id, history.sessions),
+                collector: session.creditCollector,
+              } : undefined}
+              oldDebt={oldDebts.get(player.name.trim().toLowerCase())}
             />
           ))}
 
@@ -864,6 +1029,7 @@ export function SessionDetail() {
           }
           onClose={() => setEditBuyInsPlayer(null)}
           isLoading={actionLoading}
+          creditCollector={session.creditCollector}
         />
       )}
     </div>

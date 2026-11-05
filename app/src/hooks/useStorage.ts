@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
-import type { Session, AppSettings } from '../types';
+import type { Session, AppSettings, BuyInMethod } from '../types';
 import {
   fetchSessions as apiFetchSessions,
   fetchSession as apiFetchSession,
@@ -278,7 +278,7 @@ export function useSessions(sessionId?: string) {
     playerId: string,
     buyInId: string,
     amount: number,
-    method: 'cash' | 'bank'
+    method: BuyInMethod
   ) => {
     setIsLoading(true);
     setError(null);

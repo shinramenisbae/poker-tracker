@@ -9,6 +9,10 @@ interface PlayerRowProps {
   onEditBuyIns?: () => void;
   showCustomBuyIn?: (method: 'cash' | 'bank') => void;
   disabled?: boolean;
+  /** Live in-person sessions only: how much of the credit limit is used. */
+  credit?: { owed: number; limit: number; newPlayer: boolean; collector: string | null };
+  /** Still owed from earlier sessions. */
+  oldDebt?: { total: number; sessionCount: number };
 }
 
 export function PlayerRow({
@@ -18,6 +22,8 @@ export function PlayerRow({
   onEditBuyIns,
   showCustomBuyIn,
   disabled = false,
+  credit,
+  oldDebt,
 }: PlayerRowProps) {
   const [buyInMethod, setBuyInMethod] = useState<'cash' | 'bank'>('cash');
   const totalBuyIn = getTotalBuyIn(player);
@@ -31,6 +37,15 @@ export function PlayerRow({
   const bankTotal = player.buyIns
     .filter((b) => b.method === 'bank')
     .reduce((sum, b) => sum + b.amount, 0);
+  const prepaidTotal = player.buyIns
+    .filter((b) => b.method === 'prepaid')
+    .reduce((sum, b) => sum + b.amount, 0);
+  const collectorName = credit?.collector || 'the collector';
+  const breakdown = [
+    cashTotal > 0 ? `${formatCurrency(cashTotal)} cash` : '',
+    bankTotal > 0 ? `${formatCurrency(bankTotal)} bank` : '',
+    prepaidTotal > 0 ? `${formatCurrency(prepaidTotal)} paid to ${collectorName}` : '',
+  ].filter(Boolean).join(' + ');
 
   return (
     <div
@@ -60,12 +75,22 @@ export function PlayerRow({
               </button>
               {buyInCount > 0 && (
                 <span className="text-xs text-text-tertiary ml-1">
-                  ({cashTotal > 0 ? `${formatCurrency(cashTotal)} cash` : ''}
-                  {cashTotal > 0 && bankTotal > 0 ? ' + ' : ''}
-                  {bankTotal > 0 ? `${formatCurrency(bankTotal)} bank` : ''})
+                  ({breakdown})
                 </span>
               )}
             </div>
+            {credit && (
+              <p className="text-xs text-text-tertiary" data-testid="credit-used">
+                {credit.newPlayer
+                  ? `New player — no credit, bank buy-ins are paid to ${collectorName} up front`
+                  : `Owes ${formatCurrency(credit.owed)} of ${formatCurrency(credit.limit)} credit`}
+              </p>
+            )}
+            {oldDebt && (
+              <p className="text-xs text-accent-negative font-medium" data-testid="old-debt">
+                ⚠️ Still owes {formatCurrency(oldDebt.total)} from {oldDebt.sessionCount} earlier session{oldDebt.sessionCount !== 1 ? 's' : ''}
+              </p>
+            )}
           </div>
         </div>
 

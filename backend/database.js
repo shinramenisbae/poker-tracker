@@ -258,6 +258,16 @@ db.serialize(() => {
     )
   `);
 
+  // Migration: the credit limit — how much of a night's buy-ins a player may
+  // owe the banker — and who collects anything over it straight away. See
+  // credit-limit.js. Existing sessions take the $500 starting limit.
+  db.run(`ALTER TABLE sessions ADD COLUMN creditLimit REAL NOT NULL DEFAULT 500`, (err) => {
+    // Ignore error if column already exists
+  });
+  db.run(`ALTER TABLE sessions ADD COLUMN creditCollector TEXT`, (err) => {
+    // Ignore error if column already exists
+  });
+
   // Migration: where the bot posts the rake pile. Unset means it records rake
   // but posts nothing, which is how a second group starts out.
   db.run(`ALTER TABLE bot_settings ADD COLUMN rakeChannelId TEXT`, (err) => {
