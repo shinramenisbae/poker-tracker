@@ -169,4 +169,13 @@ function rebuildResultsMessage(original, rebuilt) {
   return `${mention}${rebuilt}${tail}`;
 }
 
-export { computePerPlayerResults, formatMoney, formatCash, formatResultsMessage, rebuildResultsMessage };
+/**
+ * Is this message a results post? Recognised by its heading, not its first
+ * character: with a poker role set the post opens with the role mention.
+ * @param {string} content
+ */
+function isResultsPost(content) {
+  return (content || '').includes('🎲 **Session results —');
+}
+
+export { computePerPlayerResults, formatMoney, formatCash, formatResultsMessage, rebuildResultsMessage, isResultsPost };

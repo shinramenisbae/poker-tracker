@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage } from './results-message.js';
+import { computePerPlayerResults, formatResultsMessage, rebuildResultsMessage, isResultsPost } from './results-message.js';
 
 // Two winners and a loser; Daniel H won the most, Stephen won less.
 const session = (over = {}) => ({
@@ -128,4 +128,17 @@ test('formatResultsMessage: a collector who banks keeps what was paid up front',
 
 test('formatResultsMessage: nothing paid up front, no line', () => {
   assert.doesNotMatch(messageFor(session()), /Paid up front/);
+});
+
+test('isResultsPost: found whether or not it opens with the poker role mention', () => {
+  const body = messageFor(session());
+  assert.equal(isResultsPost(body), true);
+  assert.equal(isResultsPost(`<@&1511234576104820746>\n${body}`), true);
+});
+
+test('isResultsPost: other bot posts are not results', () => {
+  assert.equal(isResultsPost('✅ **Nick** marked as paid. 🎉 Everyone has paid!'), false);
+  assert.equal(isResultsPost('💸 **Still unpaid — 2026-11-05**'), false);
+  assert.equal(isResultsPost(''), false);
+  assert.equal(isResultsPost(undefined), false);
 });
