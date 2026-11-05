@@ -197,3 +197,99 @@ describe('SessionDetail: saying when a typed name was redirected', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });
+
+describe('SessionDetail: credit limit', () => {
+  const fresh = (id: string, name: string, buyIns: unknown[] = []) => ({ ...player(id, name, 0, null), buyIns });
+  const bank = (id: string, amount: number) =>
+    ({ id, playerId: 'x', amount, timestamp: '2026-09-28T05:00:00.000Z', isRebuy: 0, method: 'bank' });
+  const live = (over: Record<string, unknown> = {}) => session({
+    creditLimit: 500, creditCollector: 'Stephen',
+    players: [fresh('s1-leo', 'Leo', [bank('b1', 400)]), fresh('s1-newbie', 'Newbie')],
+    ...over,
+  });
+  // Leo has played before and still owes $120 from it; Newbie never has.
+  const earlier = {
+    ...session({ id: 's0', status: 'completed', bankPlayerId: 's0-jeremy' }),
+    players: [
+      { ...player('s0-jeremy', 'Jeremy', 100, 220), sessionId: 's0' },
+      { ...player('s0-leo', 'Leo', 0, 0), sessionId: 's0', buyIns: [bank('b0', 120)] },
+    ],
+  };
+  const history = (current: unknown) => ({
+    '/api/sessions': [current, earlier],
+    '/api/payments': { paymentsBySession: {} },
+  });
+
+  it('shows the limit, what each player owes against it, and who is new', async () => {
+    const current = live();
+    stubApi({ '/api/sessions/s1': current, ...history(current) });
+
+    renderLive();
+
+    expect(await screen.findByLabelText('Each player may owe')).toHaveValue(500);
+    expect(screen.getByLabelText('Over the limit, pay')).toHaveValue('Stephen');
+    await waitFor(() => expect(screen.getAllByTestId('credit-used')).toHaveLength(2));
+    const [leo, newbie] = screen.getAllByTestId('credit-used');
+    expect(leo).toHaveTextContent('Owes $400.00 of $500.00 credit');
+    expect(newbie).toHaveTextContent('New player — no credit');
+  });
+
+  it('warns about debts from earlier sessions', async () => {
+    const current = live();
+    stubApi({ '/api/sessions/s1': current, ...history(current) });
+
+    renderLive();
+
+    expect(await screen.findByTestId('old-debt')).toHaveTextContent('Still owes $120.00 from 1 earlier session');
+  });
+
+  it('saves a changed limit and collector', async () => {
+    const current = live();
+    const fetchMock = stubApi({ '/api/sessions/s1': current, ...history(current) });
+    const user = userEvent.setup();
+
+    renderLive();
+    const limit = await screen.findByLabelText('Each player may owe');
+    await user.clear(limit);
+    await user.type(limit, '300');
+    await user.clear(screen.getByLabelText('Over the limit, pay'));
+    await user.type(screen.getByLabelText('Over the limit, pay'), 'Nick');
+    await user.click(screen.getByRole('button', { name: 'Save credit limit' }));
+
+    await waitFor(() => {
+      const put = fetchMock.mock.calls.find(([u, init]) => u === '/api/sessions/s1' && (init as RequestInit | undefined)?.method === 'PUT');
+      expect(put && JSON.parse(String((put[1] as RequestInit).body))).toEqual({ creditLimit: 300, creditCollector: 'Nick' });
+    });
+  });
+
+  it('online sessions have no credit limit', async () => {
+    stubApi({ '/api/sessions/s1': live({ gameType: 'online' }) });
+
+    renderLive();
+
+    await screen.findByText('Leo');
+    expect(screen.queryByLabelText('Each player may owe')).not.toBeInTheDocument();
+  });
+
+  it('a buy-in that went over the limit says who to pay now', async () => {
+    const current = live();
+    stubApi({
+      '/api/sessions/s1': current,
+      ...history(current),
+      '/api/sessions/s1/players/s1-newbie/buyins': {
+        ...current,
+        creditSplit: { owed: 0, prepaid: 100, collector: 'Stephen', limit: 0, newPlayer: true },
+      },
+    });
+    const user = userEvent.setup();
+
+    renderLive();
+    await screen.findByText('Newbie');
+    const newbieRow = screen.getByText('Newbie').closest('.rounded-xl') as HTMLElement;
+    await user.click(within(newbieRow).getByRole('button', { name: 'Bank' }));
+    await user.click(within(newbieRow).getByRole('button', { name: '+$100' }));
+
+    expect(await screen.findByTestId('credit-notice')).toHaveTextContent(
+      'Newbie is new, so gets no credit — pay $100.00 to Stephen now (instant transfer or cash).');
+  });
+});

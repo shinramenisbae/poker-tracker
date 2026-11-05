@@ -103,3 +103,29 @@ test('rebuildResultsMessage: a bare message is simply replaced', () => {
   const rebuilt = rebuildResultsMessage('🎲 **Session results — 2026-09-16**\nold body', 'new body only');
   assert.equal(rebuilt, 'new body only');
 });
+
+// Leo owed his $500 limit and paid Stephen $300 more on the night.
+const withPrepaid = (over = {}) => session({
+  creditCollector: 'Stephen',
+  players: [
+    { id: 'p-daniel', name: 'Daniel H', buyIns: [{ amount: 200, method: 'cash' }], cashOut: { amount: 1000 } },
+    { id: 'p-leo', name: 'Leo', buyIns: [{ amount: 500, method: 'bank' }, { amount: 300, method: 'prepaid' }], cashOut: { amount: 0 } },
+  ],
+  ...over,
+});
+
+test('formatResultsMessage: money paid up front goes from the collector to the banker', () => {
+  const msg = messageFor(withPrepaid());
+  assert.match(msg, /💳 \*\*Paid up front\*\* \(over the credit limit\): \$300\.00 — Stephen → Daniel H/);
+  // Leo lost all $800 he bought in for.
+  assert.match(msg, /• Leo: −\$800\.00/);
+});
+
+test('formatResultsMessage: a collector who banks keeps what was paid up front', () => {
+  const msg = messageFor(withPrepaid({ bankPlayerId: 'p-daniel', creditCollector: 'Daniel H' }));
+  assert.match(msg, /\$300\.00 — kept by Daniel H/);
+});
+
+test('formatResultsMessage: nothing paid up front, no line', () => {
+  assert.doesNotMatch(messageFor(session()), /Paid up front/);
+});

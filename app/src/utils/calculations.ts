@@ -4,6 +4,22 @@ export function getTotalBuyIn(player: Player): number {
   return player.buyIns.reduce((sum, buyIn) => sum + buyIn.amount, 0);
 }
 
+/** What a player owes the banker for tonight's buy-ins: the bank ones. Cash
+ *  was paid on the table and 'prepaid' to the credit collector. */
+export function getOwedBuyIn(player: Player): number {
+  return player.buyIns
+    .filter((b) => b.method === 'bank')
+    .reduce((sum, b) => sum + b.amount, 0);
+}
+
+/** New players get no credit. Same rule as the server (credit-limit.js): no
+ *  player of that name in any other session. */
+export function isNewPlayer(name: string, sessionId: string, sessions: Session[]): boolean {
+  const key = name.trim().toLowerCase();
+  return !sessions.some((s) => s.id !== sessionId
+    && (s.players ?? []).some((p) => p.name.trim().toLowerCase() === key));
+}
+
 export function getProfitLoss(player: Player): number | null {
   const totalBuyIn = getTotalBuyIn(player);
   if (player.cashOut === null) return null;
@@ -90,10 +106,12 @@ export function calculateSettlements(session: Session): Settlement[] {
     const cashBuyIn = player.buyIns
       .filter((b) => (b.method || 'cash') === 'cash')
       .reduce((sum, b) => sum + b.amount, 0);
-    const bankBuyIn = player.buyIns
-      .filter((b) => b.method === 'bank')
+    const bankBuyIn = getOwedBuyIn(player);
+    // Paid to the credit collector, so neither on the table nor owed.
+    const prepaidBuyIn = player.buyIns
+      .filter((b) => b.method === 'prepaid')
       .reduce((sum, b) => sum + b.amount, 0);
-    const totalBuyIn = cashBuyIn + bankBuyIn;
+    const totalBuyIn = cashBuyIn + bankBuyIn + prepaidBuyIn;
     const profitLoss = player.cashOut !== null ? cashOut - totalBuyIn : 0;
 
     // net = cashout - bank_buyin
@@ -107,6 +125,7 @@ export function calculateSettlements(session: Session): Settlement[] {
       profitLoss,
       cashBuyIn,
       bankBuyIn,
+      prepaidBuyIn,
       netWithBank,
     };
   });
@@ -169,6 +188,14 @@ export function getSettlementSummary(session: Session): SettlementSummary | null
     ? { amount: rakeAmount, holderName: rakeHolderName, holderIsBank: rakeHolderName === bankPlayer.name }
     : null;
 
+  // Buy-ins over a credit limit were paid to the collector on the night, so
+  // the collector owes them to the bank — the mirror image of the rake.
+  const prepaidAmount = Math.round(settlements.reduce((sum, s) => sum + s.prepaidBuyIn, 0) * 100) / 100;
+  const collectorName = session.creditCollector || null;
+  const prepaid = prepaidAmount > 0
+    ? { amount: prepaidAmount, collectorName, collectorIsBank: collectorName === bankPlayer.name }
+    : null;
+
   return {
     bankPlayerId: bankId,
     bankPlayerName: bankPlayer.name,
@@ -177,8 +204,10 @@ export function getSettlementSummary(session: Session): SettlementSummary | null
     cashToDistribute: nonBankSettlements.reduce((sum, s) => sum + s.cashReceived, 0),
     bankTransfersOut: nonBankSettlements.reduce((sum, s) => sum + s.bankReceived, 0)
       + (rake && !rake.holderIsBank ? rake.amount : 0),
-    bankTransfersIn: nonBankSettlements.reduce((sum, s) => sum + s.bankOwed, 0),
+    bankTransfersIn: nonBankSettlements.reduce((sum, s) => sum + s.bankOwed, 0)
+      + (prepaid && !prepaid.collectorIsBank ? prepaid.amount : 0),
     rake,
+    prepaid,
   };
 }
 

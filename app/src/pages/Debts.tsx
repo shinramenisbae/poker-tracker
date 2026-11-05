@@ -1,38 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useSessions } from '../hooks/useStorage';
-import { calculateSettlements, identifyBankPlayer, formatCurrency } from '../utils/calculations';
+import { formatCurrency } from '../utils/calculations';
+import { aggregateDebts } from '../utils/debts';
 import { fetchAllPayments, type AllPaymentsResponse } from '../api';
-
-interface DebtRow {
-  playerName: string;
-  total: number;
-  sessionCount: number;
-}
-
-// Mirrors the bot's aggregateDebts (bot/debts.js), which itself reuses the
-// unpaidDebtors rule: a debtor is a non-bank player with bankOwed > 0 who
-// hasn't been marked paid. Active sessions have no settlements; a session
-// closed with /finish is skipped outright.
-function aggregateDebts(
-  sessions: ReturnType<typeof useSessions>['sessions'],
-  paymentsBySession: AllPaymentsResponse['paymentsBySession'],
-): DebtRow[] {
-  const totals = new Map<string, DebtRow>();
-  for (const session of sessions) {
-    if (session.status !== 'completed' || session.settledAt) continue;
-    const bankId = session.bankPlayerId || identifyBankPlayer(session);
-    const paid = new Set(Object.keys(paymentsBySession[session.id] || {}));
-    for (const s of calculateSettlements(session)) {
-      if (s.playerId === bankId || s.bankOwed <= 0.005 || paid.has(s.playerName)) continue;
-      const row = totals.get(s.playerName) || { playerName: s.playerName, total: 0, sessionCount: 0 };
-      row.total += s.bankOwed;
-      row.sessionCount += 1;
-      totals.set(s.playerName, row);
-    }
-  }
-  return [...totals.values()].sort((a, b) => b.total - a.total);
-}
 
 export function Debts() {
   const navigate = useNavigate();

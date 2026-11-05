@@ -1,4 +1,4 @@
-import type { Session, Player } from '../types';
+import type { Session, Player, BuyInMethod } from '../types';
 
 const API_BASE_URL = '/api';
 
@@ -188,7 +188,7 @@ export async function updateBuyIn(
   playerId: string,
   buyInId: string,
   amount: number,
-  method: 'cash' | 'bank'
+  method: BuyInMethod
 ): Promise<Session> {
   const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/players/${playerId}/buyins/${buyInId}`, {
     method: 'PUT',

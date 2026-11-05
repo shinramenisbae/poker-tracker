@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Player, BuyIn } from '../types';
+import type { Player, BuyIn, BuyInMethod } from '../types';
 import { formatCurrency, getTotalBuyIn } from '../utils/calculations';
 
 // Entry time of a buy-in in local time, e.g. "9:42 PM". The API returns an ISO
@@ -12,7 +12,9 @@ function formatBuyInTime(ts: number | string): string {
 
 interface BuyInsModalProps {
   player: Player;
-  onUpdateBuyIn: (buyInId: string, amount: number, method: 'cash' | 'bank') => void;
+  onUpdateBuyIn: (buyInId: string, amount: number, method: BuyInMethod) => void;
+  /** Who over-limit buy-ins are paid to, for labelling them. */
+  creditCollector?: string | null;
   onDeleteBuyIn: (buyInId: string) => void;
   onClose: () => void;
   isLoading?: boolean;
@@ -24,10 +26,12 @@ export function BuyInsModal({
   onDeleteBuyIn,
   onClose,
   isLoading = false,
+  creditCollector = null,
 }: BuyInsModalProps) {
+  const prepaidLabel = creditCollector ? `Paid to ${creditCollector}` : 'Paid up front';
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editAmount, setEditAmount] = useState('');
-  const [editMethod, setEditMethod] = useState<'cash' | 'bank'>('cash');
+  const [editMethod, setEditMethod] = useState<BuyInMethod>('cash');
 
   const startEdit = (buyIn: BuyIn) => {
     setEditingId(buyIn.id);
@@ -90,6 +94,16 @@ export function BuyInsModal({
                       >
                         Bank
                       </button>
+                      <button
+                        onClick={() => setEditMethod('prepaid')}
+                        className={`flex-1 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                          editMethod === 'prepaid'
+                            ? 'bg-accent-positive text-white shadow-sm'
+                            : 'text-text-secondary hover:text-text-primary'
+                        }`}
+                      >
+                        {prepaidLabel}
+                      </button>
                     </div>
                     <div className="relative">
                       <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary">$</span>
@@ -128,9 +142,11 @@ export function BuyInsModal({
                       <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${
                         (buyIn.method || 'cash') === 'cash'
                           ? 'bg-accent-amber/20 text-accent-amber'
-                          : 'bg-accent-primary/20 text-accent-primary'
+                          : buyIn.method === 'prepaid'
+                            ? 'bg-accent-positive/20 text-accent-positive'
+                            : 'bg-accent-primary/20 text-accent-primary'
                       }`}>
-                        {(buyIn.method || 'cash')}
+                        {buyIn.method === 'prepaid' ? prepaidLabel : (buyIn.method || 'cash')}
                       </span>
                       <span className="text-xs text-text-tertiary ml-2">
                         #{index + 1}

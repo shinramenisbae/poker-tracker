@@ -36,7 +36,7 @@ function identifyBankPlayer(session) {
 }
 
 // Returns the per-player settlement rows, mirroring calculateSettlements().
-// Each row: { playerId, playerName, profitLoss, cashBuyIn, bankBuyIn,
+// Each row: { playerId, playerName, profitLoss, cashBuyIn, bankBuyIn, prepaidBuyIn,
 //             netWithBank, cashReceived, bankReceived, bankOwed }
 function calculateSettlements(session) {
   const players = session.players || [];
@@ -57,10 +57,14 @@ function calculateSettlements(session) {
     const bankBuyIn = (player.buyIns || [])
       .filter((b) => b.method === 'bank')
       .reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
-    const totalIn = cashBuyIn + bankBuyIn;
+    // Over a credit limit, paid to the collector: neither on the table nor owed.
+    const prepaidBuyIn = (player.buyIns || [])
+      .filter((b) => b.method === 'prepaid')
+      .reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+    const totalIn = cashBuyIn + bankBuyIn + prepaidBuyIn;
     const profitLoss = hasCashedOut(player) ? cashOut - totalIn : 0;
     const netWithBank = cashOut - bankBuyIn;
-    return { playerId: player.id, playerName: player.name, profitLoss, cashBuyIn, bankBuyIn, netWithBank };
+    return { playerId: player.id, playerName: player.name, profitLoss, cashBuyIn, bankBuyIn, prepaidBuyIn, netWithBank };
   });
 
   const totalOwed = raw
