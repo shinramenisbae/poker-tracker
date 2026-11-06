@@ -49,7 +49,7 @@ export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
 
   return (
     <div className="card mb-4" data-testid="cash-payouts">
-      <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-1">Paid in Cash</h3>
+      <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-1">Paid out in Cash</h3>
       <p className="text-xs text-text-tertiary mb-3">
         {summary.cashMode === 'saved' ? 'Recorded.' : 'Suggested, not saved yet.'} Cash goes in $50s; the rest is settled by transfer.
       </p>
