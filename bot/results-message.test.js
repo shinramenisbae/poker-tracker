@@ -156,14 +156,19 @@ const withCash = (cash = {}) => session({
 
 test('formatResultsMessage: says nothing about cash until someone records it', () => {
   const msg = messageFor(withCash());
-  assert.doesNotMatch(msg, /gets \$/);
+  assert.doesNotMatch(msg, /took \$|gets \$/);
   assert.match(msg, /• Min: −\$550\.00  _\(paid in cash on the table\)_/);
 });
 
 test('formatResultsMessage: recorded cash shows how each player is paid', () => {
   const msg = messageFor(withCash({ simon: 500, min: 450 }));
-  assert.match(msg, /• Simon: .*_\(gets \$500\.00 cash, transfers \$5\.00 back\)_/);
-  assert.match(msg, /• Min: −\$550\.00  _\(gets \$450\.00 cash\)_/);
+  assert.match(msg, /• Simon: .*_\(took \$500\.00 cash, transfers \$5\.00 back\)_/);
+  assert.match(msg, /• Min: −\$550\.00  _\(took \$450\.00 cash\)_/);
+});
+
+test('formatResultsMessage: cash already taken and a transfer still to come read differently', () => {
+  const msg = messageFor(withCash({ simon: 300, min: 450 }));
+  assert.match(msg, /• Simon: .*_\(took \$300\.00 cash, gets \$195\.00 by transfer\)_/);
 });
 
 test('formatResultsMessage: a player recorded with no cash is paid by transfer', () => {
