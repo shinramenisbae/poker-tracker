@@ -29,14 +29,15 @@ function formatCash(n) {
   return `$${Math.abs(Number(n) || 0).toFixed(2)}`;
 }
 
-/** How the banker pays a player, once someone has recorded the cash. */
+/**
+ * How the banker pays a player, once someone has recorded the cash. The cash
+ * was handed over at the table, so it is past tense; a transfer is still to come.
+ */
 function payoutNote(s) {
-  const parts = [];
-  if (s.cashReceived > 0.005) parts.push(`${formatCash(s.cashReceived)} cash`);
-  if (s.bankReceived > 0.005) parts.push(`${formatCash(s.bankReceived)} by transfer`);
-  const gets = parts.length > 0 ? `gets ${parts.join(' + ')}` : '';
+  const took = s.cashReceived > 0.005 ? `took ${formatCash(s.cashReceived)} cash` : '';
+  const gets = s.bankReceived > 0.005 ? `gets ${formatCash(s.bankReceived)} by transfer` : '';
   const back = s.changeOwed > 0.005 ? `transfers ${formatCash(s.changeOwed)} back` : '';
-  const note = [gets, back].filter(Boolean).join(', ');
+  const note = [took, gets, back].filter(Boolean).join(', ');
   return note ? `  _(${note})_` : '';
 }
 
