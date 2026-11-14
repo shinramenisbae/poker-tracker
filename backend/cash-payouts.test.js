@@ -53,8 +53,8 @@ test('$0 is a recorded answer: paid by transfer', async () => {
   assert.equal((await cashPaid(sessionId)).Simon, 0);
 });
 
-for (const bad of [495, -50, 'lots', null]) {
-  test(`refuses ${bad}: cash comes in $50s, and a bad save changes nothing`, async () => {
+for (const bad of [-50, 'lots', null]) {
+  test(`refuses ${bad}, and a bad save changes nothing`, async () => {
     const { sessionId, simon, min } = await seed();
     await saveCashPayouts(db, sessionId, { [min]: 450 });
     await assert.rejects(saveCashPayouts(db, sessionId, { [min]: 100, [simon]: bad }), (e) => e.code === 'BAD_AMOUNT');
@@ -80,4 +80,10 @@ test('refuses while the game is still running', async () => {
 
 test('refuses an unknown session', async () => {
   await assert.rejects(saveCashPayouts(db, 'nope', {}), (e) => e.code === 'NOT_FOUND');
+});
+
+test('takes any amount, to the cent', async () => {
+  const { sessionId, simon, min } = await seed();
+  await saveCashPayouts(db, sessionId, { [simon]: 170, [min]: 449.999 });
+  assert.deepEqual(await cashPaid(sessionId), { Simon: 170, Min: 450, Nick: null });
 });

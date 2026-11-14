@@ -281,8 +281,8 @@ app.post('/api/sessions', async (req, res) => {
   const now = new Date().toISOString();
 
   const stmt = db.prepare(`
-    INSERT INTO sessions (id, date, status, notes, gameType, discordThreadId, createdAt, updatedAt, creditLimit, creditCollector, cashInFifties)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    INSERT INTO sessions (id, date, status, notes, gameType, discordThreadId, createdAt, updatedAt, creditLimit, creditCollector, cashInFifties, collectorRefunds)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
   `);
 
   stmt.run(id, date || now.split('T')[0], status || 'active', notes || '', gameType || 'in-person', discordThreadId || null, now, now, DEFAULT_CREDIT_LIMIT, creditCollector, function(err) {

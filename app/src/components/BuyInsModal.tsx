@@ -153,9 +153,8 @@ export function BuyInsModal({
                         )}
                         {buyIn.rebuyType && (
                           <span className="ml-2">
-                            · {buyIn.rebuyType === 'stacked'
-                              ? `stacked${buyIn.stackedHand ? ` (${buyIn.stackedHand})` : ''}`
-                              : 'top-up'}
+                            · {buyIn.rebuyType === 'stacked' ? 'stacked' : 'top-up'}
+                            {buyIn.stackedHand ? ` (${buyIn.stackedHand})` : ''}
                           </span>
                         )}
                       </div>

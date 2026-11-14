@@ -137,7 +137,9 @@ export function SettlementView({ summary }: SettlementViewProps) {
             <p className="text-xs text-text-tertiary mt-1">
               {summary.collected.collectorIsBank
                 ? `Transferred to ${collector} — who is banking, so it stays put`
-                : `Transferred to ${collector} — ${collector} transfers it to ${summary.bankPlayerName}`}
+                : summary.collected.refunded > 0
+                  ? `Transferred to ${collector}, who sends ${formatCurrency(summary.collected.refunded)} back to winners and the rest to ${summary.bankPlayerName}`
+                  : `Transferred to ${collector} — ${collector} transfers it to ${summary.bankPlayerName}`}
             </p>
           </div>
         )}
@@ -200,6 +202,13 @@ export function SettlementView({ summary }: SettlementViewProps) {
                         <span className="text-text-tertiary"> to {summary.bankPlayerName}</span>
                       </p>
                     )}
+                    {s.collectorRefund > 0 && (
+                      <p>
+                        <span className="text-text-tertiary">{collector} transfers</span>{' '}
+                        <span className="font-medium">{formatCurrency(s.collectorRefund)}</span>
+                        <span className="text-text-tertiary"> — their bank buy-in back</span>
+                      </p>
+                    )}
                     {s.changeOwed > 0 && (
                       <p>
                         <span className="text-text-tertiary">{s.playerName} transfers</span>{' '}
@@ -225,12 +234,13 @@ export function SettlementView({ summary }: SettlementViewProps) {
                 </div>
               );
             })}
-          {summary.collected && !summary.collected.collectorIsBank && (
+          {summary.collected && !summary.collected.collectorIsBank
+            && summary.collected.amount - summary.collected.refunded > 0.005 && (
             <div className="py-2" data-testid="collected-transfer">
               <p className="text-sm text-text-secondary">
                 <span className="font-semibold text-text-primary">{collector}</span>{' '}
                 <span className="text-text-tertiary">transfers</span>{' '}
-                <span className="font-medium">{formatCurrency(summary.collected.amount)}</span>{' '}
+                <span className="font-medium">{formatCurrency(summary.collected.amount - summary.collected.refunded)}</span>{' '}
                 <span className="px-1.5 py-0.5 rounded-full text-xs bg-accent-primary/20 text-accent-primary">bank</span>
                 <span className="text-text-tertiary"> to {summary.bankPlayerName} — bank buy-ins</span>
               </p>

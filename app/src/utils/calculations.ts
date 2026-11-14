@@ -105,6 +105,18 @@ function getCashMode(session: Session, bankId: string): SettlementSummary['cashM
   return session.cashInFifties ? 'suggested' : 'proportional';
 }
 
+/** A winner's own bank buy-in goes straight back from the collector, rather
+ *  than collector to banker to winner. Not when the collector is the banker or
+ *  the player themself, where nothing would move. */
+function refundFromCollector(
+  r: { playerName: string; bankBuyIn: number; netWithBank: number },
+  collector: string | null,
+  bankName: string | undefined,
+): number {
+  if (!collector || collector === bankName || collector === r.playerName) return 0;
+  return roundCents(Math.min(r.bankBuyIn, Math.max(r.netWithBank, 0)));
+}
+
 export function calculateSettlements(session: Session): Settlement[] {
   // Online sessions imported by the bot are created already `completed` and
   // never have a bankPlayerId set (only the in-person "End Session" flow sets
@@ -152,16 +164,22 @@ export function calculateSettlements(session: Session): Settlement[] {
     };
   });
 
-  // Cash in $50s, as recorded or as suggested until someone records it.
+  // Cash as recorded, or as suggested until someone records it.
   if (cashMode !== 'proportional') {
     const cashPaidBy = new Map(session.players.map((p) => [p.id, p.cashPaid ?? 0]));
+    const bankName = session.players.find((p) => p.id === bankId)?.name;
+    const collector = session.collectorRefunds ? session.creditCollector || null : null;
     const rows = raw.map((r) => {
-      if (r.playerId === bankId) return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
+      if (r.playerId === bankId) return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
       if (r.netWithBank <= 0) {
-        return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0 };
+        return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
       }
-      const cashReceived = cashMode === 'saved' ? cashPaidBy.get(r.playerId) ?? 0 : suggestCash(r);
-      return { ...r, cashReceived, bankOwed: 0, ...transferAfterCash(r.netWithBank, cashReceived) };
+      const collectorRefund = refundFromCollector(r, collector, bankName);
+      const owedByBank = r.netWithBank - collectorRefund;
+      const cashReceived = cashMode === 'saved'
+        ? cashPaidBy.get(r.playerId) ?? 0
+        : suggestCash({ cashBuyIn: r.cashBuyIn, netWithBank: owedByBank });
+      return { ...r, cashReceived, bankOwed: 0, collectorRefund, ...transferAfterCash(owedByBank, cashReceived) };
     });
     // Whatever nobody took stays with the banker.
     const handedOut = rows.reduce((sum, r) => sum + r.cashReceived, 0);
@@ -187,6 +205,7 @@ export function calculateSettlements(session: Session): Settlement[] {
         bankReceived: 0,
         bankOwed: 0,
         changeOwed: 0,
+        collectorRefund: 0,
       };
     }
 
@@ -197,12 +216,12 @@ export function calculateSettlements(session: Session): Settlement[] {
         : 0;
       const cashReceived = Math.min(cashShare, r.netWithBank);
       const bankReceived = Math.round((r.netWithBank - cashReceived) * 100) / 100;
-      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0 };
+      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
     } else if (r.netWithBank < 0) {
       // Player owes money — bank transfer to bank player
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0 };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
     } else {
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
     }
   });
 }
@@ -231,8 +250,9 @@ export function getSettlementSummary(session: Session): SettlementSummary | null
   // collector owes them to the banker — the mirror image of the rake.
   const collectedAmount = roundCents(settlements.reduce((sum, s) => sum + s.bankBuyIn, 0));
   const collectorName = session.creditCollector || null;
+  const refunded = roundCents(settlements.reduce((sum, s) => sum + s.collectorRefund, 0));
   const collected = collectedAmount > 0
-    ? { amount: collectedAmount, collectorName, collectorIsBank: collectorName === bankPlayer.name }
+    ? { amount: collectedAmount, collectorName, collectorIsBank: collectorName === bankPlayer.name, refunded }
     : null;
   const cashToCollect = settlements.reduce((sum, s) => sum + s.cashBuyIn, 0);
   const cashToDistribute = nonBankSettlements.reduce((sum, s) => sum + s.cashReceived, 0);
@@ -246,7 +266,7 @@ export function getSettlementSummary(session: Session): SettlementSummary | null
     bankTransfersOut: nonBankSettlements.reduce((sum, s) => sum + s.bankReceived, 0)
       + (rake && !rake.holderIsBank ? rake.amount : 0),
     bankTransfersIn: nonBankSettlements.reduce((sum, s) => sum + s.bankOwed + s.changeOwed, 0)
-      + (collected && !collected.collectorIsBank ? collected.amount : 0),
+      + (collected && !collected.collectorIsBank ? collected.amount - collected.refunded : 0),
     rake,
     collected,
     cashMode: getCashMode(session, bankId),

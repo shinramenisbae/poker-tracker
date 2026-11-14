@@ -46,10 +46,19 @@ describe('SettlementView: bank buy-ins', () => {
   });
 
   it('says who transfers the change back when cash was rounded up', () => {
-    const s = session();
+    const s = session({ creditCollector: 'Daniel H' });
     s.players[1] = { ...s.players[1], cashOut: { amount: 995, timestamp: 0 }, cashPaid: 500 };
     render(<SettlementView summary={getSettlementSummary(s)!} />);
 
     expect(screen.getByText(/Leo transfers/, { selector: 'span' }).parentElement).toHaveTextContent('Leo transfers $5.00 back to Daniel H');
+  });
+
+  it('says when the collector sends a winner their bank buy-in back', () => {
+    const s = session({ cashInFifties: 1, collectorRefunds: 1 });
+    s.players[1] = { ...s.players[1], cashOut: { amount: 995, timestamp: 0 }, cashPaid: 0 };
+    render(<SettlementView summary={getSettlementSummary(s)!} />);
+
+    expect(screen.getByText(/their bank buy-in back/).parentElement).toHaveTextContent('Stephen transfers $300.00 — their bank buy-in back');
+    expect(screen.queryByTestId('collected-transfer')).not.toBeInTheDocument();
   });
 });

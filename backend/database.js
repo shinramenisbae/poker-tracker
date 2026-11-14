@@ -292,6 +292,14 @@ db.serialize(() => {
     // Ignore error if column already exists
   });
 
+  // Migration: the collector sends a winner their own bank buy-in straight
+  // back, rather than collector to banker to winner. Sessions settled the old
+  // way keep their numbers, so it is on only for sessions that say so: every
+  // new one, and any switched on by hand.
+  db.run(`ALTER TABLE sessions ADD COLUMN collectorRefunds INTEGER NOT NULL DEFAULT 0`, (err) => {
+    // Ignore error if column already exists
+  });
+
   // Migration: where the bot posts the rake pile. Unset means it records rake
   // but posts nothing, which is how a second group starts out.
   db.run(`ALTER TABLE bot_settings ADD COLUMN rakeChannelId TEXT`, (err) => {
