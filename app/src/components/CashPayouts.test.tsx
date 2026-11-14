@@ -34,9 +34,9 @@ const row = (name: string) => within(screen.getByTestId(`cash-${name}`));
 describe('CashPayouts', () => {
   it('starts from a suggestion: cash back for whoever bought in with cash', () => {
     renderIt(players());
-    expect(row('Simon').getByText('$500')).toBeInTheDocument();
+    expect(row('Simon').getByLabelText('Cash for Simon')).toHaveValue(500);
     expect(row('Simon').getByText(/transfers \$5\.00 back/)).toBeInTheDocument();
-    expect(row('Jeremy').getByText('$0')).toBeInTheDocument();
+    expect(row('Jeremy').getByLabelText('Cash for Jeremy')).toHaveValue(0);
     expect(row('Jeremy').getByText(/gets \$190\.00 by transfer/)).toBeInTheDocument();
     expect(screen.getByText(/not saved yet/)).toBeInTheDocument();
   });
@@ -53,7 +53,7 @@ describe('CashPayouts', () => {
 
     await user.click(screen.getByRole('button', { name: '$50 more cash for Jeremy' }));
     await user.click(screen.getByRole('button', { name: '$50 more cash for Jeremy' }));
-    expect(row('Jeremy').getByText('$100')).toBeInTheDocument();
+    expect(row('Jeremy').getByLabelText('Cash for Jeremy')).toHaveValue(100);
     expect(row('Jeremy').getByText(/gets \$90\.00 by transfer/)).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Save cash payouts' }));
@@ -75,13 +75,46 @@ describe('CashPayouts', () => {
     renderIt(players(450));
     const user = userEvent.setup();
 
-    expect(row('Simon').getByText('$450')).toBeInTheDocument();
-    expect(row('Jeremy').getByText('$0')).toBeInTheDocument();
+    expect(row('Simon').getByLabelText('Cash for Simon')).toHaveValue(450);
+    expect(row('Jeremy').getByLabelText('Cash for Jeremy')).toHaveValue(0);
     expect(screen.getByText(/Recorded/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save cash payouts' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '$50 more cash for Simon' }));
     expect(screen.getByRole('button', { name: 'Save cash payouts' })).toBeInTheDocument();
+  });
+
+  it('takes any typed amount, not just $50s', async () => {
+    const onSave = renderIt(players());
+    const user = userEvent.setup();
+
+    const field = screen.getByLabelText('Cash for Simon');
+    await user.clear(field);
+    await user.type(field, '495');
+    expect(row('Simon').queryByText(/back/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save cash payouts' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith({ Simon: 495, Jeremy: 0 }));
+  });
+
+  it('the buttons step from whatever was typed', async () => {
+    renderIt(players());
+    const user = userEvent.setup();
+
+    const field = screen.getByLabelText('Cash for Simon');
+    await user.clear(field);
+    await user.type(field, '170');
+    await user.click(screen.getByRole('button', { name: '$50 more cash for Simon' }));
+    expect(field).toHaveValue(220);
+  });
+
+  it('will not save an empty or negative amount', async () => {
+    renderIt(players());
+    const user = userEvent.setup();
+
+    await user.clear(screen.getByLabelText('Cash for Simon'));
+    expect(screen.getByRole('button', { name: 'Save cash payouts' })).toBeDisabled();
+    expect(screen.getByText('Cash amounts must be $0 or more.')).toBeInTheDocument();
   });
 
   it('says so when saved but Discord could not be updated', async () => {

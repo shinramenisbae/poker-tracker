@@ -170,7 +170,7 @@ describe('getSettlementSummary with bank buy-ins', () => {
 
   it('the collector owes the banker what was transferred up front', () => {
     const summary = getSettlementSummary(creditSession())!;
-    expect(summary.collected).toEqual({ amount: 300, collectorName: 'Stephen', collectorIsBank: false });
+    expect(summary.collected).toEqual({ amount: 300, collectorName: 'Stephen', collectorIsBank: false, refunded: 0 });
     expect(summary.bankTransfersIn).toBe(800);
   });
 
@@ -183,7 +183,7 @@ describe('getSettlementSummary with bank buy-ins', () => {
 
   it('nothing moves when the collector is banking', () => {
     const summary = getSettlementSummary(creditSession({ creditCollector: 'Daniel H' }))!;
-    expect(summary.collected).toEqual({ amount: 300, collectorName: 'Daniel H', collectorIsBank: true });
+    expect(summary.collected).toEqual({ amount: 300, collectorName: 'Daniel H', collectorIsBank: true, refunded: 0 });
     expect(summary.bankTransfersIn).toBe(500);
   });
 
@@ -283,5 +283,55 @@ describe('cash in $50s', () => {
     expect(row(s, 'min').cashReceived).not.toBe(450);
     const saved = night({ cashInFifties: 0, players: players({ min: 450 }) as Session['players'] });
     expect(row(saved, 'min')).toMatchObject({ cashReceived: 450, bankReceived: 0 });
+  });
+});
+
+describe('the collector pays a winner their bank buy-in straight back', () => {
+  // 13/11: Daniel H banks, Nick collects. Alvin is owed $1,095 and took $700
+  // cash; Simon is owed $415 and took $170; Nick is owed his own $16 win.
+  const buyIn = (id: string, amount: number, method: 'cash' | 'bank' | 'credit') => ({ id, amount, method, timestamp: 0, notes: '' });
+  const night = (over: Partial<Session> = {}) => session({
+    bankPlayerId: 'daniel', rakeAmount: 0, cashInFifties: 1, collectorRefunds: 1, creditCollector: 'Nick',
+    players: [
+      { id: 'daniel', name: 'Daniel H', paymentMethod: 'cash', cashOut: { amount: 1226, timestamp: 0 }, buyIns: [buyIn('a', 300, 'credit')] },
+      { id: 'alvin', name: 'Alvin', paymentMethod: 'cash', cashPaid: 700, cashOut: { amount: 1595, timestamp: 0 }, buyIns: [buyIn('b', 500, 'credit'), buyIn('c', 400, 'bank')] },
+      { id: 'simon', name: 'Simon', paymentMethod: 'cash', cashPaid: 170, cashOut: { amount: 915, timestamp: 0 }, buyIns: [buyIn('d', 500, 'credit'), buyIn('e', 100, 'bank')] },
+      { id: 'nick', name: 'Nick', paymentMethod: 'cash', cashPaid: 0, cashOut: { amount: 516, timestamp: 0 }, buyIns: [buyIn('f', 500, 'credit')] },
+      { id: 'leo', name: 'Leo', paymentMethod: 'cash', cashOut: { amount: 0, timestamp: 0 }, buyIns: [buyIn('g', 500, 'credit'), buyIn('h', 400, 'bank')] },
+      { id: 'min', name: 'Min', paymentMethod: 'cash', cashPaid: 870, cashOut: { amount: 0, timestamp: 0 }, buyIns: [buyIn('i', 870, 'cash')] },
+    ] as Session['players'],
+    ...over,
+  });
+  const row = (s: Session, id: string) => calculateSettlements(s).find((r) => r.playerId === id)!;
+
+  it('sends the bank buy-in back first, and the rest settles as before', () => {
+    expect(row(night(), 'alvin')).toMatchObject({ collectorRefund: 400, cashReceived: 700, bankReceived: 0, changeOwed: 5 });
+    expect(row(night(), 'simon')).toMatchObject({ collectorRefund: 100, cashReceived: 170, bankReceived: 145 });
+  });
+
+  it('never sends back more than the player is owed', () => {
+    const s = night();
+    s.players[2] = { ...s.players[2], cashPaid: 0, cashOut: { amount: 550, timestamp: 0 } };
+    expect(row(s, 'simon')).toMatchObject({ collectorRefund: 50, bankReceived: 0 });
+  });
+
+  it('a loser gets nothing back', () => {
+    expect(row(night(), 'leo').collectorRefund).toBe(0);
+  });
+
+  it('the collector owes the banker only what they kept', () => {
+    const summary = getSettlementSummary(night())!;
+    expect(summary.collected).toMatchObject({ amount: 900, refunded: 500 });
+    expect(summary.bankTransfersIn).toBe(500 + 5 + 400);
+  });
+
+  it('nothing goes back when the collector is banking, or is the player', () => {
+    expect(row(night({ creditCollector: 'Daniel H' }), 'alvin').collectorRefund).toBe(0);
+    expect(row(night({ creditCollector: 'Alvin' }), 'alvin').collectorRefund).toBe(0);
+  });
+
+  it('sessions settled the old way never route a refund', () => {
+    expect(row(night({ collectorRefunds: 0 }), 'alvin')).toMatchObject({ collectorRefund: 0, bankReceived: 395 });
+    expect(row(night({ cashInFifties: 0, collectorRefunds: 0, players: night().players.map((p) => ({ ...p, cashPaid: undefined })) }), 'alvin').collectorRefund).toBe(0);
   });
 });

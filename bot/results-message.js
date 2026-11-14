@@ -40,6 +40,69 @@ function payoutNote(s) {
   return note ? `  _(${note})_` : '';
 }
 
+/** Whole dollars when there are no cents: "$500", "$74.50". */
+function dollars(n) {
+  const v = Math.round(Math.abs(Number(n) || 0) * 100) / 100;
+  return Number.isInteger(v) ? `$${v}` : `$${v.toFixed(2)}`;
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * Who pays whom, one line each, so the banker can see what to send and to whom
+ * without working it out from the winners and losers.
+ *
+ * The collector's bank buy-ins, less whatever they sent straight back to
+ * winners, are netted with anything the collector is owed or owes themself.
+ */
+function settleUpSection(session, settlements, bankName, cashSaved) {
+  const collector = session.creditCollector || null;
+  const collected = round2(settlements.reduce((sum, r) => sum + (r.bankBuyIn || 0), 0));
+  const refunded = round2(settlements.reduce((sum, r) => sum + (r.collectorRefund || 0), 0));
+  let collectorOwes = collected > 0.005 && collector !== bankName ? round2(collected - refunded) : 0;
+
+  const pay = [];
+  const paidOut = [];
+  const done = [];
+  for (const r of settlements) {
+    if (r.playerName === bankName) continue;
+    let owes = r.bankOwed + r.changeOwed;
+    const why = [];
+    if (r.changeOwed > 0.005) why.push('cash change');
+    if (r.playerName === collector && collectorOwes > 0.005) {
+      owes += collectorOwes;
+      why.push('bank buy-ins');
+      if (r.bankReceived > 0.005) why.push(`less their ${dollars(r.bankReceived)} win`);
+      collectorOwes = 0;
+    }
+    const net = round2(owes - r.bankReceived);
+    if (net > 0.005) pay.push({ amount: net, line: `• ${r.playerName} ${dollars(net)}${why.length ? ` (${why.join(', ')})` : ''}` });
+    else if (net < -0.005) paidOut.push({ amount: -net, line: `• ${r.playerName} ${dollars(-net)}` });
+    else if (!(r.collectorRefund > 0.005)) done.push(r.playerName);
+  }
+  if (collectorOwes > 0.005) {
+    pay.push({ amount: collectorOwes, line: `• ${collector || 'Whoever collected the bank buy-ins'} ${dollars(collectorOwes)} (bank buy-ins)` });
+  }
+
+  const rake = Number(session.rakeAmount) || 0;
+  const holder = session.rakeHolder || bankName;
+  if (rake > 0.005 && holder !== bankName) paidOut.push({ amount: rake, line: `• ${holder} ${dollars(rake)} (rake)` });
+
+  const byAmount = (a, b) => b.amount - a.amount;
+  let msg = '';
+  if (!cashSaved) msg += '_Cash paid out not recorded yet, so this may change._\n';
+  if (pay.length > 0) msg += `💸 **Pay ${bankName}**\n${pay.sort(byAmount).map((x) => x.line).join('\n')}\n\n`;
+  if (paidOut.length > 0) msg += `🏦 **${bankName} pays**\n${paidOut.sort(byAmount).map((x) => x.line).join('\n')}\n\n`;
+  for (const r of settlements) {
+    if (r.collectorRefund > 0.005) {
+      msg += `🔁 ${collector} → ${r.playerName} ${dollars(r.collectorRefund)} (their bank buy-in back)\n`;
+    }
+  }
+  if (refunded > 0.005) msg += '\n';
+  if (done.length > 0) msg += `✅ **Done**: ${done.join(', ')}\n\n`;
+  return msg;
+}
+
 function formatResultsMessage(session, results, bankAccounts) {
   const winners = results.filter((r) => r.profit > 0.005);
   const losers = results.filter((r) => r.profit < -0.005);
@@ -61,7 +124,10 @@ function formatResultsMessage(session, results, bankAccounts) {
   // shows what's already covered on the table vs still owed via bank transfer.
   const settlements = calculateSettlements(session);
   const settleByName = new Map(settlements.map((s) => [s.playerName, s]));
-  const cashRecorded = bankPlayer ? cashMode(session, bankPlayer.id) === 'saved' : false;
+  const mode = bankPlayer ? cashMode(session, bankPlayer.id) : 'proportional';
+  const cashRecorded = mode === 'saved';
+  // Older sessions keep their proportional split, so they say what they said.
+  const settleUp = bankPlayer && mode !== 'proportional';
   const noteFor = (name) => (cashRecorded && settleByName.has(name) ? payoutNote(settleByName.get(name)) : '');
 
   let msg = `🎲 **Session results — ${session.date}**\n`;
@@ -127,12 +193,14 @@ function formatResultsMessage(session, results, bankAccounts) {
       : `🧾 **Rake**: ${formatCash(rakeAmount)} → ${holder || 'nobody named'}\n\n`;
   }
 
+  if (settleUp) msg += settleUpSection(session, settlements, bankPlayer.name, cashRecorded);
+
   // Bank buy-ins were transferred on the night to the collector, who owes them
-  // to the banker — the rake's mirror image.
+  // to the banker — the rake's mirror image. The settle-up list already says so.
   const collectedAmount = Math.round((session.players || []).reduce((sum, p) => sum + (p.buyIns || [])
     .filter((b) => b.method === 'bank')
     .reduce((s, b) => s + (Number(b.amount) || 0), 0), 0) * 100) / 100;
-  if (collectedAmount > 0.005) {
+  if (collectedAmount > 0.005 && !settleUp) {
     const collector = session.creditCollector || null;
     msg += bankPlayer && collector === bankPlayer.name
       ? `💳 **Bank buy-ins**: ${formatCash(collectedAmount)} — kept by ${collector}\n\n`

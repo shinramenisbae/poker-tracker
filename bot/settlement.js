@@ -11,8 +11,10 @@
 //   - Credit buy-ins are owed to the banker after the game.
 //   - The banker settles everyone else by cash and/or bank transfer. What a
 //     player still *owes* is only their credit shortfall (netWithBank).
-//   - Cash goes out in $50s, as recorded on the Results page or as suggested
-//     until then; older sessions split it proportionally until one is recorded.
+//   - Cash goes out as recorded on the Results page, or as suggested (to the
+//     nearest $50) until then; older sessions split it proportionally until
+//     one is recorded.
+//   - A winner's own bank buy-in goes straight back from the collector.
 
 function totalBuyIn(player) {
   return (player.buyIns || []).reduce((s, b) => s + (Number(b.amount) || 0), 0);
@@ -42,6 +44,12 @@ const round2 = (n) => Math.round(n * 100) / 100;
 /** Suggested cash, mirroring suggestCash() on the frontend. */
 function suggestCash({ cashBuyIn, netWithBank }) {
   return cashBuyIn > 0 && netWithBank > 0 ? Math.round(netWithBank / 50) * 50 : 0;
+}
+
+/** Mirrors refundFromCollector() on the frontend. */
+function refundFromCollector(r, collector, bankName) {
+  if (!collector || collector === bankName || collector === r.playerName) return 0;
+  return round2(Math.min(r.bankBuyIn, Math.max(r.netWithBank, 0)));
 }
 
 function cashMode(session, bankId) {
@@ -84,14 +92,20 @@ function calculateSettlements(session) {
   const mode = cashMode(session, bankId);
   if (mode !== 'proportional') {
     const cashPaidBy = new Map(players.map((p) => [p.id, p.cashPaid ?? 0]));
+    const bankName = (players.find((p) => p.id === bankId) || {}).name;
+    const collector = session.collectorRefunds ? session.creditCollector || null : null;
     const rows = raw.map((r) => {
-      if (r.playerId === bankId) return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
+      if (r.playerId === bankId) return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
       if (r.netWithBank <= 0) {
-        return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0 };
+        return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
       }
-      const cashReceived = mode === 'saved' ? cashPaidBy.get(r.playerId) ?? 0 : suggestCash(r);
-      const difference = round2(r.netWithBank - cashReceived);
-      return { ...r, cashReceived, bankOwed: 0, bankReceived: Math.max(difference, 0), changeOwed: Math.max(-difference, 0) };
+      const collectorRefund = refundFromCollector(r, collector, bankName);
+      const owedByBank = r.netWithBank - collectorRefund;
+      const cashReceived = mode === 'saved'
+        ? cashPaidBy.get(r.playerId) ?? 0
+        : suggestCash({ cashBuyIn: r.cashBuyIn, netWithBank: owedByBank });
+      const difference = round2(owedByBank - cashReceived);
+      return { ...r, cashReceived, bankOwed: 0, collectorRefund, bankReceived: Math.max(difference, 0), changeOwed: Math.max(-difference, 0) };
     });
     // Whatever nobody took stays with the banker.
     const handedOut = rows.reduce((sum, r) => sum + r.cashReceived, 0);
@@ -111,7 +125,7 @@ function calculateSettlements(session) {
 
   return raw.map((r) => {
     if (r.playerId === bankId) {
-      return { ...r, cashReceived: cashForBankPlayer, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
+      return { ...r, cashReceived: cashForBankPlayer, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
     }
     if (r.netWithBank > 0) {
       const cashShare = totalOwed > 0
@@ -119,11 +133,11 @@ function calculateSettlements(session) {
         : 0;
       const cashReceived = Math.min(cashShare, r.netWithBank);
       const bankReceived = Math.round((r.netWithBank - cashReceived) * 100) / 100;
-      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0 };
+      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
     } else if (r.netWithBank < 0) {
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0 };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
     }
-    return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0 };
+    return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
   });
 }
 

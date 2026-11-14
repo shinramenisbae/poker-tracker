@@ -1,4 +1,4 @@
-// Cash the banker hands out at the end of a night, always in $50s.
+// Cash the banker hands out at the end of a night: any amount, to the cent.
 //
 // Recording it replaces the whole set for the session: a player left out of the
 // amounts is someone who is not being paid in cash. A player with nothing coming
@@ -22,7 +22,7 @@ async function owedBack(db, player) {
 /**
  * @param {import('sqlite3').Database} db
  * @param {string} sessionId
- * @param {Record<string, number>} amounts playerId -> cash, in multiples of $50
+ * @param {Record<string, number>} amounts playerId -> cash
  */
 async function saveCashPayouts(db, sessionId, amounts) {
   const session = await getAsync(db, 'SELECT status FROM sessions WHERE id = ?', [sessionId]);
@@ -40,10 +40,10 @@ async function saveCashPayouts(db, sessionId, amounts) {
     for (const [playerId, raw] of Object.entries(amounts)) {
       const player = byId.get(playerId);
       if (!player) throw failure('UNKNOWN_PLAYER', `Player ${playerId} is not in this session`);
-      const amount = raw;
-      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0 || amount % 50 !== 0) {
-        throw failure('BAD_AMOUNT', `Cash for ${player.name} must be $0 or more, in $50s`);
+      if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) {
+        throw failure('BAD_AMOUNT', `Cash for ${player.name} must be $0 or more`);
       }
+      const amount = Math.round(raw * 100) / 100;
       if (amount > 0 && (await owedBack(db, player)) <= 0) {
         throw failure('BAD_AMOUNT', `${player.name} has nothing coming back from the banker`);
       }

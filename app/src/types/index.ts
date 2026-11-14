@@ -26,6 +26,9 @@ export interface Session {
    *  Unset on older sessions, which keep their proportional split until a cash
    *  amount is saved for them. */
   cashInFifties?: number;
+  /** The collector sends each winner their own bank buy-in straight back.
+   *  Unset on sessions that were settled the old way. */
+  collectorRefunds?: number;
   /** Only on the response to adding a buy-in: set when part of it went over
    *  the limit and has to be paid up front. */
   creditSplit?: CreditSplit | null;
@@ -104,6 +107,9 @@ export interface Settlement {
   bankOwed: number;
   /** Cash rounded up past what they were owed: they transfer the change back. */
   changeOwed: number;
+  /** Their own bank buy-in, sent straight back by the collector instead of
+   *  going via the banker. Only for someone the banker owes. */
+  collectorRefund: number;
 }
 
 export interface SettlementSummary {
@@ -130,6 +136,8 @@ export interface CollectedSummary {
   collectorName: string | null;
   /** The collector is banking, so no money moves for it. */
   collectorIsBank: boolean;
+  /** Paid straight back to winners by the collector, out of `amount`. */
+  refunded: number;
 }
 
 export interface AppSettings {

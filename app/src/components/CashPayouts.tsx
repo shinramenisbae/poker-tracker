@@ -8,11 +8,13 @@ interface CashPayoutsProps {
 }
 
 /**
- * The banker decides who takes cash, in $50s, because only someone in the room
- * knows who is still there. The difference is settled by transfer either way.
+ * The banker decides who takes cash, because only someone in the room knows who
+ * is still there. The buttons step in $50s and any amount can be typed. The
+ * difference is settled by transfer either way.
  */
 export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
-  const [draft, setDraft] = useState<Record<string, number>>({});
+  // What is being typed, per player; parsed when used.
+  const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ error: boolean; text: string } | null>(null);
 
@@ -20,15 +22,20 @@ export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
   if (rows.length === 0) return null;
 
   const recorded = (s: Settlement) => (summary.cashMode === 'saved' ? s.cashReceived : suggestCash(s));
-  const cashFor = (s: Settlement) => draft[s.playerId] ?? recorded(s);
+  const typed = (s: Settlement) => draft[s.playerId] ?? String(recorded(s));
+  const cashFor = (s: Settlement) => {
+    const n = Number(typed(s));
+    return typed(s).trim() !== '' && Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : NaN;
+  };
+  const invalid = rows.some((s) => Number.isNaN(cashFor(s)));
   const unsaved = summary.cashMode !== 'saved' || rows.some((s) => cashFor(s) !== s.cashReceived);
 
-  const handedOut = rows.reduce((sum, s) => sum + cashFor(s), 0);
+  const handedOut = rows.reduce((sum, s) => sum + (cashFor(s) || 0), 0);
   const left = Math.round((summary.cashToCollect - handedOut) * 100) / 100;
 
   const step = (s: Settlement, by: number) => {
     setMessage(null);
-    setDraft({ ...draft, [s.playerId]: Math.max(cashFor(s) + by, 0) });
+    setDraft({ ...draft, [s.playerId]: String(Math.max((cashFor(s) || 0) + by, 0)) });
   };
 
   const save = async () => {
@@ -51,19 +58,20 @@ export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
     <div className="card mb-4" data-testid="cash-payouts">
       <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-1">Paid out in Cash</h3>
       <p className="text-xs text-text-tertiary mb-3">
-        {summary.cashMode === 'saved' ? 'Recorded.' : 'Suggested, not saved yet.'} Cash goes in $50s; the rest is settled by transfer.
+        {summary.cashMode === 'saved' ? 'Recorded.' : 'Suggested, not saved yet.'} Type any amount or step in $50s; the rest is settled by transfer.
       </p>
 
       <div className="space-y-3">
         {rows.map((s) => {
           const cash = cashFor(s);
-          const { bankReceived, changeOwed } = transferAfterCash(s.netWithBank, cash);
+          const { bankReceived, changeOwed } = transferAfterCash(s.netWithBank - s.collectorRefund, cash || 0);
           return (
             <div key={s.playerId} className="flex items-center justify-between gap-3" data-testid={`cash-${s.playerName}`}>
               <div className="min-w-0">
                 <p className="font-medium text-text-primary">{s.playerName}</p>
                 <p className="text-xs text-text-tertiary">
                   Owed {formatCurrency(s.netWithBank)}
+                  {s.collectorRefund > 0 && ` · gets ${formatCurrency(s.collectorRefund)} bank buy-in back from ${summary.collected?.collectorName ?? 'the collector'}`}
                   {changeOwed > 0 && ` · transfers ${formatCurrency(changeOwed)} back`}
                   {bankReceived > 0 && ` · gets ${formatCurrency(bankReceived)} by transfer`}
                 </p>
@@ -71,13 +79,25 @@ export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => step(s, -50)}
-                  disabled={saving || cash <= 0}
+                  disabled={saving || !(cash > 0)}
                   aria-label={`$50 less cash for ${s.playerName}`}
                   className="btn-secondary w-10 h-10 disabled:opacity-50"
                 >
                   −
                 </button>
-                <span className="w-16 text-center font-semibold tabular-nums">${cash}</span>
+                <div className="relative w-24">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-text-tertiary">$</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    value={typed(s)}
+                    onChange={(e) => { setMessage(null); setDraft({ ...draft, [s.playerId]: e.target.value }); }}
+                    aria-label={`Cash for ${s.playerName}`}
+                    className="input w-full pl-5 text-center font-semibold tabular-nums"
+                    disabled={saving}
+                  />
+                </div>
                 <button
                   onClick={() => step(s, 50)}
                   disabled={saving}
@@ -107,8 +127,11 @@ export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
       {message && (
         <p className={`text-xs mt-2 ${message.error ? 'text-accent-negative' : 'text-accent-positive'}`}>{message.text}</p>
       )}
+      {invalid && (
+        <p className="text-xs text-accent-negative mt-2">Cash amounts must be $0 or more.</p>
+      )}
       {unsaved && (
-        <button onClick={save} disabled={saving} className="btn-primary w-full mt-3 disabled:opacity-50">
+        <button onClick={save} disabled={saving || invalid} className="btn-primary w-full mt-3 disabled:opacity-50">
           {saving ? 'Saving…' : 'Save cash payouts'}
         </button>
       )}
