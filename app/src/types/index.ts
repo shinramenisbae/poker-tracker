@@ -110,6 +110,9 @@ export interface Settlement {
   /** Their own bank buy-in, sent straight back by the collector instead of
    *  going via the banker. Only for someone the banker owes. */
   collectorRefund: number;
+  /** The most the collector could send back: their bank buy-in, or 0 when
+   *  refunds don't apply to them. */
+  refundCap: number;
 }
 
 export interface SettlementSummary {

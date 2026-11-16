@@ -213,23 +213,22 @@ test('settle-up: lists who pays the banker, netting the collector', () => {
   const pay = msg.slice(msg.indexOf('💸 **Pay Daniel H**'), msg.indexOf('🏦 **Daniel H pays**'));
   assert.equal(pay.trim(), [
     '💸 **Pay Daniel H**',
-    '• Nick $684 (bank buy-ins, less their $16 win)',
+    '• Nick $689 ($705 bank buy-ins, less their $16 win)',
     '• Leo $500',
     '• Adam $74 (cash change)',
     '• Jordan $16 (cash change)',
-    '• Alvin $5 (cash change)',
   ].join('\n'));
 });
 
 test('settle-up: lists who the banker pays, and who is done', () => {
   const msg = messageFor(friday());
   assert.match(msg, /🏦 \*\*Daniel H pays\*\*\n• Stephen \$208\n• Simon \$145\n/);
-  assert.match(msg, /🔁 Nick → Alvin \$400 \(their bank buy-in back\)\n🔁 Nick → Simon \$100 \(their bank buy-in back\)/);
+  assert.match(msg, /🔁 Nick → Alvin \$395 \(their bank buy-in back\)\n🔁 Nick → Simon \$100 \(their bank buy-in back\)/);
   assert.match(msg, /✅ \*\*Done\*\*: Daniel Y, Min/);
 });
 
 test('settle-up: the money adds up for the banker', () => {
-  // In: 684 + 500 + 74 + 16 + 5. Out: 208 + 145. What is left is Daniel H's
+  // In: 689 + 500 + 74 + 16. Out: 208 + 145. What is left is Daniel H's
   // $926 win, since every dollar of the $2,600 cash on the table went out.
   const msg = messageFor(friday());
   const sum = (section) => [...section.matchAll(/\$(\d+(?:\.\d+)?)/g)].reduce((t, m) => t + Number(m[1]), 0);
@@ -254,7 +253,52 @@ test('settle-up: older sessions keep the message they had', () => {
 
 test('settle-up: a session settled the old way routes everything via the banker', () => {
   const msg = messageFor({ ...friday(), collectorRefunds: 0 });
-  assert.match(msg, /• Nick \$1184 \(bank buy-ins, less their \$16 win\)/);
+  assert.match(msg, /• Nick \$1184 \(\$1200 bank buy-ins, less their \$16 win\)/);
   assert.match(msg, /• Alvin \$395\n/);
   assert.doesNotMatch(msg, /🔁/);
+});
+
+// 16/11 "Max PAIN Monday": Daniel H banks, Nick collects. KZ bought in $200
+// cash, $500 credit and $500 bank, cashed out $703 and took his $200 back.
+const monday = () => session({
+  date: '2026-11-16',
+  bankPlayerId: 'p-dan',
+  cashInFifties: 1,
+  collectorRefunds: 1,
+  creditCollector: 'Nick',
+  players: [
+    { id: 'p-stephen', name: 'Stephen', cashPaid: 100, buyIns: [{ amount: 200, method: 'credit' }, { amount: 200, method: 'cash' }], cashOut: { amount: 315 } },
+    { id: 'p-jordan', name: 'Jordan', cashPaid: 800, buyIns: [{ amount: 100, method: 'credit' }, { amount: 1000, method: 'cash' }], cashOut: { amount: 956 } },
+    { id: 'p-leo', name: 'Leo', buyIns: [{ amount: 200, method: 'credit' }], cashOut: { amount: 0 } },
+    { id: 'p-simon', name: 'Simon', cashPaid: 750, buyIns: [{ amount: 750, method: 'cash' }], cashOut: { amount: 1016 } },
+    { id: 'p-nick', name: 'Nick', buyIns: [{ amount: 500, method: 'credit' }, { amount: 200, method: 'cash' }, { amount: 100, method: 'bank' }], cashOut: { amount: 0 } },
+    { id: 'p-jeremy', name: 'Jeremy', cashPaid: 0, buyIns: [{ amount: 300, method: 'credit' }], cashOut: { amount: 456 } },
+    { id: 'p-alvin', name: 'Alvin', cashPaid: 500, buyIns: [{ amount: 200, method: 'credit' }], cashOut: { amount: 745 } },
+    { id: 'p-kz', name: 'KZ', cashPaid: 200, buyIns: [{ amount: 200, method: 'cash' }, { amount: 500, method: 'credit' }, { amount: 500, method: 'bank' }], cashOut: { amount: 703 } },
+    { id: 'p-dan', name: 'Daniel H', buyIns: [{ amount: 500, method: 'credit' }], cashOut: { amount: 1259 } },
+  ],
+});
+
+test('16/11: KZ took his cash back, so he only gets the $3 left, from Nick', () => {
+  const msg = messageFor(monday());
+  assert.match(msg, /• KZ: −\$497\.00  _\(took \$200\.00 cash, gets \$3\.00 bank buy-in back from Nick\)_/);
+  assert.match(msg, /🔁 Nick → KZ \$3 \(their bank buy-in back\)/);
+  assert.doesNotMatch(msg, /KZ \$200|transfers \$200\.00 back/);
+});
+
+test('16/11: Nick hands over the bank buy-ins he still holds, with his own credit', () => {
+  const msg = messageFor(monday());
+  const pay = msg.slice(msg.indexOf('💸 **Pay Daniel H**'), msg.indexOf('🏦 **Daniel H pays**'));
+  assert.equal(pay.trim(), ['💸 **Pay Daniel H**', '• Nick $1097 ($500 credit + $597 bank buy-ins)', '• Leo $200'].join('\n'));
+  assert.match(msg, /🏦 \*\*Daniel H pays\*\*\n• Simon \$266\n• Jeremy \$156\n• Jordan \$56\n• Alvin \$45\n• Stephen \$15\n/);
+});
+
+test('16/11: the money adds up for the banker', () => {
+  // In: 1,097 + 200. Out: 266 + 156 + 56 + 45 + 15. Every dollar of the $2,350
+  // cash on the table went back out, so what is left is Daniel H's $759 win.
+  const msg = messageFor(monday());
+  const sum = (section) => [...section.matchAll(/\$(\d+(?:\.\d+)?)/g)].reduce((t, m) => t + Number(m[1]), 0);
+  const pay = msg.slice(msg.indexOf('💸 **Pay Daniel H**'), msg.indexOf('🏦 **Daniel H pays**')).replace(/\(.*\)/g, '');
+  const out = msg.slice(msg.indexOf('🏦 **Daniel H pays**'), msg.indexOf('🔁'));
+  assert.equal(sum(pay) - sum(out), 759);
 });

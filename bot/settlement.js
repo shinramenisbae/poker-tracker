@@ -46,10 +46,19 @@ function suggestCash({ cashBuyIn, netWithBank }) {
   return cashBuyIn > 0 && netWithBank > 0 ? Math.round(netWithBank / 50) * 50 : 0;
 }
 
-/** Mirrors refundFromCollector() on the frontend. */
-function refundFromCollector(r, collector, bankName) {
+/** Mirrors refundCapFor() on the frontend. */
+function refundCapFor(r, collector, bankName) {
   if (!collector || collector === bankName || collector === r.playerName) return 0;
-  return round2(Math.min(r.bankBuyIn, Math.max(r.netWithBank, 0)));
+  return r.bankBuyIn;
+}
+
+/** Mirrors settleOwed() on the frontend: cash first, then the collector's
+ *  refund, then the banker's transfer, so nobody both pays and receives. */
+function settleOwed(owed, cash, refundCap) {
+  const afterCash = round2(owed - cash);
+  const collectorRefund = round2(Math.min(refundCap, Math.max(afterCash, 0)));
+  const rest = round2(afterCash - collectorRefund);
+  return { collectorRefund, bankReceived: Math.max(rest, 0), changeOwed: Math.max(-rest, 0) };
 }
 
 function cashMode(session, bankId) {
@@ -99,13 +108,9 @@ function calculateSettlements(session) {
       if (r.netWithBank <= 0) {
         return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
       }
-      const collectorRefund = refundFromCollector(r, collector, bankName);
-      const owedByBank = r.netWithBank - collectorRefund;
-      const cashReceived = mode === 'saved'
-        ? cashPaidBy.get(r.playerId) ?? 0
-        : suggestCash({ cashBuyIn: r.cashBuyIn, netWithBank: owedByBank });
-      const difference = round2(owedByBank - cashReceived);
-      return { ...r, cashReceived, bankOwed: 0, collectorRefund, bankReceived: Math.max(difference, 0), changeOwed: Math.max(-difference, 0) };
+      const refundCap = refundCapFor(r, collector, bankName);
+      const cashReceived = mode === 'saved' ? cashPaidBy.get(r.playerId) ?? 0 : suggestCash(r);
+      return { ...r, cashReceived, bankOwed: 0, ...settleOwed(r.netWithBank, cashReceived, refundCap) };
     });
     // Whatever nobody took stays with the banker.
     const handedOut = rows.reduce((sum, r) => sum + r.cashReceived, 0);
