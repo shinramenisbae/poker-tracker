@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Settlement, SettlementSummary } from '../types';
-import { formatCurrency, suggestCash, transferAfterCash } from '../utils/calculations';
+import { formatCurrency, settleOwed, suggestCash } from '../utils/calculations';
 
 interface CashPayoutsProps {
   summary: SettlementSummary;
@@ -64,14 +64,14 @@ export function CashPayouts({ summary, onSave }: CashPayoutsProps) {
       <div className="space-y-3">
         {rows.map((s) => {
           const cash = cashFor(s);
-          const { bankReceived, changeOwed } = transferAfterCash(s.netWithBank - s.collectorRefund, cash || 0);
+          const { collectorRefund, bankReceived, changeOwed } = settleOwed(s.netWithBank, cash || 0, s.refundCap);
           return (
             <div key={s.playerId} className="flex items-center justify-between gap-3" data-testid={`cash-${s.playerName}`}>
               <div className="min-w-0">
                 <p className="font-medium text-text-primary">{s.playerName}</p>
                 <p className="text-xs text-text-tertiary">
                   Owed {formatCurrency(s.netWithBank)}
-                  {s.collectorRefund > 0 && ` · gets ${formatCurrency(s.collectorRefund)} bank buy-in back from ${summary.collected?.collectorName ?? 'the collector'}`}
+                  {collectorRefund > 0 && ` · gets ${formatCurrency(collectorRefund)} bank buy-in back from ${summary.collected?.collectorName ?? 'the collector'}`}
                   {changeOwed > 0 && ` · transfers ${formatCurrency(changeOwed)} back`}
                   {bankReceived > 0 && ` · gets ${formatCurrency(bankReceived)} by transfer`}
                 </p>

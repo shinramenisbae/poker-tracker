@@ -304,9 +304,31 @@ describe('the collector pays a winner their bank buy-in straight back', () => {
   });
   const row = (s: Session, id: string) => calculateSettlements(s).find((r) => r.playerId === id)!;
 
-  it('sends the bank buy-in back first, and the rest settles as before', () => {
-    expect(row(night(), 'alvin')).toMatchObject({ collectorRefund: 400, cashReceived: 700, bankReceived: 0, changeOwed: 5 });
+  it('sends back what is still owed after the cash, then the banker pays the rest', () => {
+    expect(row(night(), 'alvin')).toMatchObject({ collectorRefund: 395, cashReceived: 700, bankReceived: 0, changeOwed: 0 });
     expect(row(night(), 'simon')).toMatchObject({ collectorRefund: 100, cashReceived: 170, bankReceived: 145 });
+  });
+
+  it('16/11: KZ took his $200 cash back, so Nick sends only the $3 left', () => {
+    // KZ: $200 cash, $500 credit, $500 bank, out $703. Owed $203, took $200.
+    const s = night();
+    s.players.push({ id: 'kz', name: 'KZ', paymentMethod: 'cash', cashPaid: 200, cashOut: { amount: 703, timestamp: 0 },
+      buyIns: [buyIn('k1', 200, 'cash'), buyIn('k2', 500, 'credit'), buyIn('k3', 500, 'bank')] } as Session['players'][number]);
+    expect(row(s, 'kz')).toMatchObject({ cashReceived: 200, collectorRefund: 3, bankReceived: 0, changeOwed: 0, bankOwed: 0 });
+  });
+
+  it('nobody both pays and receives', () => {
+    for (const r of calculateSettlements(night())) {
+      const pays = r.bankOwed + r.changeOwed;
+      const gets = r.bankReceived + r.collectorRefund;
+      expect(pays > 0 && gets > 0).toBe(false);
+    }
+  });
+
+  it('cash over what is owed means no refund, only change back', () => {
+    const s = night();
+    s.players[1] = { ...s.players[1], cashPaid: 1100 };
+    expect(row(s, 'alvin')).toMatchObject({ collectorRefund: 0, bankReceived: 0, changeOwed: 5 });
   });
 
   it('never sends back more than the player is owed', () => {
@@ -321,8 +343,8 @@ describe('the collector pays a winner their bank buy-in straight back', () => {
 
   it('the collector owes the banker only what they kept', () => {
     const summary = getSettlementSummary(night())!;
-    expect(summary.collected).toMatchObject({ amount: 900, refunded: 500 });
-    expect(summary.bankTransfersIn).toBe(500 + 5 + 400);
+    expect(summary.collected).toMatchObject({ amount: 900, refunded: 495 });
+    expect(summary.bankTransfersIn).toBe(500 + 405);
   });
 
   it('nothing goes back when the collector is banking, or is the player', () => {

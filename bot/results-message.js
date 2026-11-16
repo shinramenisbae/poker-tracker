@@ -33,11 +33,14 @@ function formatCash(n) {
  * How the banker pays a player, once someone has recorded the cash. The cash
  * was handed over at the table, so it is past tense; a transfer is still to come.
  */
-function payoutNote(s) {
+function payoutNote(s, collector) {
   const took = s.cashReceived > 0.005 ? `took ${formatCash(s.cashReceived)} cash` : '';
+  const refund = s.collectorRefund > 0.005
+    ? `gets ${formatCash(s.collectorRefund)} bank buy-in back from ${collector || 'the collector'}`
+    : '';
   const gets = s.bankReceived > 0.005 ? `gets ${formatCash(s.bankReceived)} by transfer` : '';
   const back = s.changeOwed > 0.005 ? `transfers ${formatCash(s.changeOwed)} back` : '';
-  const note = [took, gets, back].filter(Boolean).join(', ');
+  const note = [took, refund, gets, back].filter(Boolean).join(', ');
   return note ? `  _(${note})_` : '';
 }
 
@@ -72,7 +75,10 @@ function settleUpSection(session, settlements, bankName, cashSaved) {
     if (r.changeOwed > 0.005) why.push('cash change');
     if (r.playerName === collector && collectorOwes > 0.005) {
       owes += collectorOwes;
-      why.push('bank buy-ins');
+      // Their own credit and the buy-ins they hold, so the total isn't a puzzle.
+      why.push(r.bankOwed > 0.005
+        ? `${dollars(r.bankOwed)} credit + ${dollars(collectorOwes)} bank buy-ins`
+        : `${dollars(collectorOwes)} bank buy-ins`);
       if (r.bankReceived > 0.005) why.push(`less their ${dollars(r.bankReceived)} win`);
       collectorOwes = 0;
     }
@@ -129,7 +135,7 @@ function formatResultsMessage(session, results, bankAccounts) {
   const cashRecorded = mode === 'saved';
   // Older sessions keep their proportional split, so they say what they said.
   const settleUp = bankPlayer && mode !== 'proportional';
-  const noteFor = (name) => (cashRecorded && settleByName.has(name) ? payoutNote(settleByName.get(name)) : '');
+  const noteFor = (name) => (cashRecorded && settleByName.has(name) ? payoutNote(settleByName.get(name), session.creditCollector) : '');
 
   let msg = `🎲 **Session results — ${session.date}**\n`;
   msg += session.gameType === 'online' ? '🌐 _Online session_\n\n' : '🪑 _In-person session_\n\n';

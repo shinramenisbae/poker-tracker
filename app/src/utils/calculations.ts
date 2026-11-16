@@ -27,6 +27,21 @@ export function transferAfterCash(owed: number, cash: number): { bankReceived: n
   return { bankReceived: Math.max(difference, 0), changeOwed: Math.max(-difference, 0) };
 }
 
+/**
+ * What a player the banker owes still gets after the cash they took: first
+ * their own bank buy-in back from the collector, up to `refundCap`, then the
+ * rest by transfer from the banker. Cash comes first, so a player who took
+ * back more than they were owed gets no refund and transfers the change back:
+ * nobody both pays and receives.
+ */
+export function settleOwed(owed: number, cash: number, refundCap: number): {
+  collectorRefund: number; bankReceived: number; changeOwed: number;
+} {
+  const afterCash = roundCents(owed - cash);
+  const collectorRefund = roundCents(Math.min(refundCap, Math.max(afterCash, 0)));
+  return { collectorRefund, ...transferAfterCash(afterCash - collectorRefund, 0) };
+}
+
 /** New players get no credit. Same rule as the server (credit-limit.js): no
  *  player of that name in any other session. */
 export function isNewPlayer(name: string, sessionId: string, sessions: Session[]): boolean {
@@ -105,16 +120,16 @@ function getCashMode(session: Session, bankId: string): SettlementSummary['cashM
   return session.cashInFifties ? 'suggested' : 'proportional';
 }
 
-/** A winner's own bank buy-in goes straight back from the collector, rather
- *  than collector to banker to winner. Not when the collector is the banker or
- *  the player themself, where nothing would move. */
-function refundFromCollector(
-  r: { playerName: string; bankBuyIn: number; netWithBank: number },
+/** How much of a winner's own bank buy-in the collector can send straight
+ *  back, rather than collector to banker to winner. None when the collector is
+ *  the banker or the player themself, where nothing would move. */
+function refundCapFor(
+  r: { playerName: string; bankBuyIn: number },
   collector: string | null,
   bankName: string | undefined,
 ): number {
   if (!collector || collector === bankName || collector === r.playerName) return 0;
-  return roundCents(Math.min(r.bankBuyIn, Math.max(r.netWithBank, 0)));
+  return r.bankBuyIn;
 }
 
 export function calculateSettlements(session: Session): Settlement[] {
@@ -170,16 +185,12 @@ export function calculateSettlements(session: Session): Settlement[] {
     const bankName = session.players.find((p) => p.id === bankId)?.name;
     const collector = session.collectorRefunds ? session.creditCollector || null : null;
     const rows = raw.map((r) => {
-      if (r.playerId === bankId) return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
-      if (r.netWithBank <= 0) {
-        return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
-      }
-      const collectorRefund = refundFromCollector(r, collector, bankName);
-      const owedByBank = r.netWithBank - collectorRefund;
-      const cashReceived = cashMode === 'saved'
-        ? cashPaidBy.get(r.playerId) ?? 0
-        : suggestCash({ cashBuyIn: r.cashBuyIn, netWithBank: owedByBank });
-      return { ...r, cashReceived, bankOwed: 0, collectorRefund, ...transferAfterCash(owedByBank, cashReceived) };
+      const none = { cashReceived: 0, bankReceived: 0, changeOwed: 0, collectorRefund: 0, refundCap: 0 };
+      if (r.playerId === bankId) return { ...r, ...none, bankOwed: 0 };
+      if (r.netWithBank <= 0) return { ...r, ...none, bankOwed: Math.abs(r.netWithBank) };
+      const refundCap = refundCapFor(r, collector, bankName);
+      const cashReceived = cashMode === 'saved' ? cashPaidBy.get(r.playerId) ?? 0 : suggestCash(r);
+      return { ...r, cashReceived, bankOwed: 0, refundCap, ...settleOwed(r.netWithBank, cashReceived, refundCap) };
     });
     // Whatever nobody took stays with the banker.
     const handedOut = rows.reduce((sum, r) => sum + r.cashReceived, 0);
@@ -206,6 +217,7 @@ export function calculateSettlements(session: Session): Settlement[] {
         bankOwed: 0,
         changeOwed: 0,
         collectorRefund: 0,
+        refundCap: 0,
       };
     }
 
@@ -216,12 +228,12 @@ export function calculateSettlements(session: Session): Settlement[] {
         : 0;
       const cashReceived = Math.min(cashShare, r.netWithBank);
       const bankReceived = Math.round((r.netWithBank - cashReceived) * 100) / 100;
-      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
+      return { ...r, cashReceived, bankReceived, bankOwed: 0, changeOwed: 0, collectorRefund: 0, refundCap: 0 };
     } else if (r.netWithBank < 0) {
       // Player owes money — bank transfer to bank player
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0 };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: Math.abs(r.netWithBank), changeOwed: 0, collectorRefund: 0, refundCap: 0 };
     } else {
-      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0 };
+      return { ...r, cashReceived: 0, bankReceived: 0, bankOwed: 0, changeOwed: 0, collectorRefund: 0, refundCap: 0 };
     }
   });
 }
